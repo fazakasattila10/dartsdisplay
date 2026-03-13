@@ -1,4 +1,4 @@
-import { onValue, ref } from "firebase/database";
+import { onValue, push, ref } from "firebase/database";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { StyleProp, ViewStyle } from "react-native";
 import {
@@ -14,6 +14,7 @@ import {
   useWindowDimensions,
 } from "react-native";
 import { db } from "../../lib/firebase";
+import HistoryScreen from "./HistoryScreen";
 import ScoringScreen from "./ScoringScreen";
 
 type BoardData = {
@@ -38,17 +39,29 @@ const CARD_BG_A = "#2f2e2d";
 const CARD_BG_B = "#2f2e2d";
 
 const BADGE_BG = "#1E1C1F";
-const BADGE_TEXT_DEFAULT = "#99949494"; // ARGB in RN (#AARRGGBB)
+const BADGE_TEXT_DEFAULT = "#99949494";
 const FULL_ICON = "#99949494";
 
-const BADGE_FRESH = "#7CFF6B"; // "lightgreen" vibe
-const BADGE_ACTIVE_BG = "#3DFF2F"; // élénk, TV-barát zöld
+const BADGE_ACTIVE_BG = "#3DFF2F";
 const BADGE_ACTIVE_TEXT = "#0B2E00";
 
-// ✅ club chip colors
+// club chip colors
 const CLUB_CHIP_BG = "rgba(0,0,0,0.85)";
 const CLUB_CHIP_BORDER = "rgba(255,255,255,0.18)";
 const CLUB_CHIP_TEXT = "rgba(255,255,255,0.82)";
+
+// global font zoom
+const FONT_ZOOM_MIN = 0.1;
+const FONT_ZOOM_MAX = 2.5;
+const FONT_ZOOM_STEP = 0.2;
+
+function clamp(n: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, n));
+}
+
+function scaleFont(size: number, zoom: number) {
+  return Math.round(size * zoom * 10) / 10;
+}
 
 function parseBoard(raw: unknown): BoardData {
   const safe = raw == null ? "" : String(raw).trim();
@@ -111,11 +124,9 @@ function toImageUri(raw: string): string {
   const s = (raw ?? "").trim();
   if (!s) return "";
 
-  // already a url or data uri
   if (/^https?:\/\//i.test(s)) return s;
   if (/^data:image\//i.test(s)) return s;
 
-  // assume base64
   return `data:image/jpeg;base64,${s}`;
 }
 
@@ -124,12 +135,16 @@ function BoardCard(props: {
   data: BoardData;
   isFullscreen: boolean;
   onToggleFullscreen: () => void;
+  onSaveHistory?: () => void;
+  onUiAction: () => void;
   isAlt?: boolean;
   isFresh: boolean;
-  isStale: boolean; // ✅ NEW
+  isStale: boolean;
+  fontZoom: number;
 }) {
   const hasData = !props.isStale && props.data.raw !== "—" && props.data.raw !== "";
   const parts = props.data.parts;
+  const z = props.fontZoom;
 
   const nameL = getPart(parts, 0);
   const nameR = getPart(parts, 1);
@@ -167,21 +182,44 @@ function BoardCard(props: {
       ]}
     >
       <View style={styles.cardHeader}>
-        <View style={[styles.boardBadge, badgeBgStyle, badgeGlowStyle]}>
-          <Text style={[styles.boardBadgeText, badgeTextStyle]}>{props.boardNr}</Text>
-        </View>
+        {props.onSaveHistory  ? (
+          <Pressable
+            onPress={() => {
+              props.onUiAction();
+              props.onSaveHistory?.();
+            }}
+            hitSlop={10}
+          >
+            <View style={[styles.boardBadge, badgeBgStyle, badgeGlowStyle]}>
+              <Text style={[styles.boardBadgeText, badgeTextStyle, { fontSize: scaleFont(13, z) }]}>
+                {props.boardNr}
+              </Text>
+            </View>
+          </Pressable>
+        ) : (
+          <View style={[styles.boardBadge, badgeBgStyle, badgeGlowStyle]}>
+            <Text style={[styles.boardBadgeText, badgeTextStyle, { fontSize: scaleFont(13, z) }]}>
+              {props.boardNr}
+            </Text>
+          </View>
+        )}
 
         <Pressable
-          onPress={props.onToggleFullscreen}
+          onPress={() => {
+            props.onUiAction();
+            props.onToggleFullscreen();
+          }}
           hitSlop={12}
           style={({ pressed }) => (pressed ? styles.fullBtnPressed : null)}
         >
-          <Text style={styles.fullIcon}>⛶</Text>
+          <Text style={[styles.fullIcon, { fontSize: scaleFont(22, z), lineHeight: scaleFont(24, z) }]}>⛶</Text>
         </Pressable>
       </View>
 
       {!hasData ? (
-        <Text style={styles.emptyText}>No action on this board in the last hour.</Text>
+        <Text style={[styles.emptyText, { fontSize: scaleFont(14, z) }]}>
+          No action on this board in the last hour.
+        </Text>
       ) : (
         <View style={styles.bodyWrap}>
           <ScrollView
@@ -191,18 +229,37 @@ function BoardCard(props: {
             contentContainerStyle={{ paddingBottom: 40 }}
           >
             <View style={styles.nameLegsRow}>
-              <Text style={[styles.nameBig, props.isFullscreen ? styles.nameBigFs : null]} numberOfLines={1}>
+              <Text
+                style={[
+                  styles.nameBig,
+                  { fontSize: scaleFont(props.isFullscreen ? 32 : 16, z) },
+                ]}
+                numberOfLines={1}
+              >
                 {nameL}
               </Text>
 
               <View style={[styles.legsCenter, props.isFullscreen ? styles.legsCenterFs : null]}>
-                <Text style={[styles.legsBig, props.isFullscreen ? styles.legsBigFs : null]} numberOfLines={1}>
+                <Text
+                  style={[
+                    styles.legsBig,
+                    {
+                      fontSize: scaleFont(props.isFullscreen ? 52 : 26, z),
+                      lineHeight: scaleFont(props.isFullscreen ? 56 : 28, z),
+                    },
+                  ]}
+                  numberOfLines={1}
+                >
                   {legsL}-{legsR}
                 </Text>
               </View>
 
               <Text
-                style={[styles.nameBig, styles.rightAlign, props.isFullscreen ? styles.nameBigFs : null]}
+                style={[
+                  styles.nameBig,
+                  styles.rightAlign,
+                  { fontSize: scaleFont(props.isFullscreen ? 32 : 16, z) },
+                ]}
                 numberOfLines={1}
               >
                 {nameR}
@@ -210,14 +267,20 @@ function BoardCard(props: {
             </View>
 
             <View style={styles.scoresRow}>
-              <Text style={[styles.scoreBig, props.isFullscreen ? styles.scoreBigFs : null]} numberOfLines={1}>
+              <Text
+                style={[
+                  styles.scoreBig,
+                  { fontSize: scaleFont(props.isFullscreen ? 72 : 36, z) },
+                ]}
+                numberOfLines={1}
+              >
                 {scoreL}
               </Text>
               <Text
                 style={[
                   styles.scoreBig,
                   styles.rightAlign,
-                  props.isFullscreen ? styles.scoreBigFs : null,
+                  { fontSize: scaleFont(props.isFullscreen ? 72 : 36, z) },
                 ]}
                 numberOfLines={1}
               >
@@ -226,11 +289,21 @@ function BoardCard(props: {
             </View>
 
             <View style={styles.lastRow}>
-              <Text style={[styles.lastText, props.isFullscreen ? styles.lastTextFs : null]} numberOfLines={1}>
+              <Text
+                style={[
+                  styles.lastText,
+                  { fontSize: scaleFont(props.isFullscreen ? 44 : 22, z) },
+                ]}
+                numberOfLines={1}
+              >
                 {lastL}
               </Text>
               <Text
-                style={[styles.lastText, styles.rightAlign, props.isFullscreen ? styles.lastTextFs : null]}
+                style={[
+                  styles.lastText,
+                  styles.rightAlign,
+                  { fontSize: scaleFont(props.isFullscreen ? 44 : 22, z) },
+                ]}
                 numberOfLines={1}
               >
                 {lastR}
@@ -238,20 +311,35 @@ function BoardCard(props: {
             </View>
 
             <View style={styles.avgX3Row}>
-              <Text style={[styles.avgX3Val, props.isFullscreen ? styles.avgX3ValFs : null]} numberOfLines={1}>
+              <Text
+                style={[
+                  styles.avgX3Val,
+                  props.isFullscreen ? styles.avgX3ValFsFill : null,
+                  { fontSize: scaleFont(props.isFullscreen ? 44 : 22, z) },
+                ]}
+                numberOfLines={1}
+              >
                 {avgX3L}
               </Text>
+
               <Text
-                style={[styles.avgX3Label, props.isFullscreen ? styles.avgX3LabelFs : null]}
+                style={[
+                  styles.avgX3Label,
+                  props.isFullscreen ? styles.avgX3LabelFsFill : null,
+                  !props.isFullscreen ? styles.avgX3LabelFill : null,
+                  { fontSize: scaleFont(props.isFullscreen ? 28 : 14, z) },
+                ]}
                 numberOfLines={1}
               >
                 Avg.x3
               </Text>
+
               <Text
                 style={[
                   styles.avgX3Val,
                   styles.rightAlign,
-                  props.isFullscreen ? styles.avgX3ValFs : null,
+                  props.isFullscreen ? styles.avgX3ValFsFill : null,
+                  { fontSize: scaleFont(props.isFullscreen ? 44 : 22, z) },
                 ]}
                 numberOfLines={1}
               >
@@ -261,12 +349,12 @@ function BoardCard(props: {
 
             <View style={styles.divider} />
 
-            <StatRow left={getPart(parts, 6)} label="Throws" right={getPart(parts, 7)} />
-            <StatRow left={getPart(parts, 10)} label="Avg." right={getPart(parts, 11)} />
-            <StatRow left={getPart(parts, 14)} label="100+" right={getPart(parts, 15)} />
-            <StatRow left={getPart(parts, 16)} label="140+" right={getPart(parts, 17)} />
-            <StatRow left={getPart(parts, 18)} label="180+" right={getPart(parts, 19)} />
-            <StatRow left={getPart(parts, 20)} label="H.out" right={getPart(parts, 21)} />
+            <StatRow left={getPart(parts, 6)} label="Throws" right={getPart(parts, 7)} fontZoom={z} />
+            <StatRow left={getPart(parts, 10)} label="Avg." right={getPart(parts, 11)} fontZoom={z} />
+            <StatRow left={getPart(parts, 14)} label="100+" right={getPart(parts, 15)} fontZoom={z} />
+            <StatRow left={getPart(parts, 16)} label="140+" right={getPart(parts, 17)} fontZoom={z} />
+            <StatRow left={getPart(parts, 18)} label="180+" right={getPart(parts, 19)} fontZoom={z} />
+            <StatRow left={getPart(parts, 20)} label="H.out" right={getPart(parts, 21)} fontZoom={z} />
 
             <View style={{ height: 70 }} />
           </ScrollView>
@@ -276,18 +364,20 @@ function BoardCard(props: {
   );
 }
 
-function StatRow(props: { left: string; label: string; right: string }) {
+function StatRow(props: { left: string; label: string; right: string; fontZoom: number }) {
+  const z = props.fontZoom;
+
   return (
     <View style={styles.statRow}>
-      <Text style={styles.statValLeft} numberOfLines={1}>
+      <Text style={[styles.statValLeft, { fontSize: scaleFont(15, z) }]} numberOfLines={1}>
         {props.left}
       </Text>
 
-      <Text style={styles.statLabel} numberOfLines={1}>
+      <Text style={[styles.statLabel, { fontSize: scaleFont(14, z) }]} numberOfLines={1}>
         {props.label}
       </Text>
 
-      <Text style={styles.statValRight} numberOfLines={1}>
+      <Text style={[styles.statValRight, { fontSize: scaleFont(15, z) }]} numberOfLines={1}>
         {props.right}
       </Text>
     </View>
@@ -317,35 +407,51 @@ export default function HomeScreen() {
   });
   const [initialScoringBoard, setInitialScoringBoard] = useState<number | null>(null);
 
-  // ✅ portrait / landscape detection for grid layout
   const { width, height } = useWindowDimensions();
-  const isPortrait = height >= width;
-  const [mode, setMode] = useState<"display" | "scoring">("display");
 
-  // ✅ QR: store parsed board + show choice dialog
+  const isProbablyDesktop =
+    typeof window !== "undefined" &&
+    (((navigator as any)?.maxTouchPoints ?? 0) === 0 || Math.max(width, height) >= 900);
+
+  const [forcedLandscape, setForcedLandscape] = useState<boolean>(() => !!isProbablyDesktop);
+  const isPortrait = !forcedLandscape && height >= width;
+  const [mode, setMode] = useState<"display" | "scoring" | "history">("display");
+
+  const [fontZoom, setFontZoom] = useState(1);
+  const [showFontSlider, setShowFontSlider] = useState(false);
+  const suppressNextBackgroundTapRef = useRef(false);
+
+  const markUiAction = () => {
+    suppressNextBackgroundTapRef.current = true;
+  };
+
+  const handleBackgroundTap = () => {
+    if (suppressNextBackgroundTapRef.current) {
+      suppressNextBackgroundTapRef.current = false;
+      return;
+    }
+    setShowFontSlider((v) => !v);
+  };
+
   const [qrBoard, setQrBoard] = useState<number | null>(null);
   const [showQrChoiceDialog, setShowQrChoiceDialog] = useState(false);
 
-  // ✅ TV / overscan-safe padding (csak TV-n nagy)
   const isTvLike = useMemo(() => {
     try {
       if (typeof navigator === "undefined") return false;
       const ua = (navigator.userAgent || "").toLowerCase();
-      // webOS (LG TV), Tizen (Samsung), Android TV
       return ua.includes("webos") || ua.includes("tizen") || ua.includes("aft") || ua.includes("android tv");
     } catch {
       return false;
     }
   }, []);
 
-  // ha nagyon nagy a felbontás és nem portrait, az is TV-gyanús
   const isLargeLandscape = width >= 1400 && height >= 800 && !isPortrait;
 
   const safePad = isTvLike || isLargeLandscape ? 24 : 8;
   const chipOffset = isTvLike || isLargeLandscape ? 24 : 10;
   const chipBottom = isTvLike || isLargeLandscape ? 48 : 40;
 
-  // Derived grid config:
   const gridCols = isPortrait ? 2 : 4;
   const gridRows = isPortrait ? 4 : 2;
 
@@ -362,7 +468,6 @@ export default function HomeScreen() {
 
   const isGrid = fullscreenBoard == null;
 
-  // ===================== CLUB MESSAGE + PHOTO (GRID ONLY UI) =====================
   const [clubMessage, setClubMessage] = useState<string>("");
   const [clubPhoto, setClubPhoto] = useState<string>("");
 
@@ -374,11 +479,15 @@ export default function HomeScreen() {
   const { width: screenW } = useWindowDimensions();
   const [msgW, setMsgW] = useState(0);
 
-  // ✅ URL query parse: only clubId/club + board -> show choice dialog
+  useEffect(() => {
+    if (!forcedLandscape) return;
+    if (height > width) {
+      setForcedLandscape(false);
+    }
+  }, [forcedLandscape, width, height]);
+
   useEffect(() => {
     if (typeof window === "undefined") return;
-
-    console.log("QUERY:", window.location.search);
 
     const qs = new URLSearchParams(window.location.search);
     const qClub = (qs.get("clubId") || qs.get("club") || "").trim().toLowerCase();
@@ -399,16 +508,13 @@ export default function HomeScreen() {
       setQrBoard(qBoard as number);
       setShowQrChoiceDialog(true);
 
-      // go back to grid while choosing
       setFullscreenBoard(null);
       setMode("display");
       setInitialScoringBoard(null);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    // when clubId changes, load dismissed for that club
     const v = loadDismissedMessage(clubId);
     setDismissedMessageValue(v);
   }, [clubId]);
@@ -419,7 +525,6 @@ export default function HomeScreen() {
     return msg !== (dismissedMessageValue ?? "");
   }, [clubMessage, dismissedMessageValue]);
 
-  // marquee loop
   useEffect(() => {
     if (!messageVisible || !isGrid) return;
     if (!msgW) return;
@@ -451,7 +556,6 @@ export default function HomeScreen() {
   const [showPhotoDialog, setShowPhotoDialog] = useState(false);
 
   useEffect(() => {
-    // subscribe message + photo for club
     const msgRef = ref(db, `messages/${clubId}message1`);
     const photoRef = ref(db, `photos/${clubId}photo1`);
 
@@ -485,7 +589,6 @@ export default function HomeScreen() {
     saveDismissedMessage(clubId, v);
   };
 
-  // ===================== SCORE BOARDS SUBSCRIBE =====================
   useEffect(() => {
     setFullscreenBoard(null);
     setBoards(() => {
@@ -510,9 +613,8 @@ export default function HomeScreen() {
     return () => unsubs.forEach((u) => u());
   }, [clubId]);
 
-  // timer freshness check
   useEffect(() => {
-      const check = () => {
+    const check = () => {
       const now = Date.now();
 
       const nextFresh: Record<number, boolean> = {};
@@ -522,7 +624,7 @@ export default function HomeScreen() {
         const ts = boards[nr]?.timestamp || 0;
 
         nextFresh[nr] = ts > 0 && now - ts <= FRESH_LIMIT_MS;
-        nextStale[nr] = ts === 0 ? true : now - ts > STALE_LIMIT_MS; // ✅ 1 órán túl: üresnek számít
+        nextStale[nr] = ts === 0 ? true : now - ts > STALE_LIMIT_MS;
       });
 
       setFreshMap(nextFresh);
@@ -534,7 +636,6 @@ export default function HomeScreen() {
     return () => clearInterval(id);
   }, [boards]);
 
-  // handle escape fullscreen by user (ESC) -> go back to grid
   useEffect(() => {
     if (typeof document === "undefined") return;
 
@@ -557,6 +658,18 @@ export default function HomeScreen() {
     setFullscreenBoard(nr);
   };
 
+  const saveBoardToHistory = async (boardNr: number) => {
+    try {
+      const raw = boards[boardNr]?.raw ?? "";
+      const value = raw.trim();
+      if (!value || value === "—") return;
+
+      await push(ref(db, `history/${clubId}/${boardNr}`), value);
+    } catch (e) {
+      console.error("[RTDB ERROR]", `history/${clubId}/${boardNr}`, e);
+    }
+  };
+
   const onPickClub = () => {
     if (typeof window === "undefined") return;
 
@@ -570,15 +683,12 @@ export default function HomeScreen() {
     setClubId(cleaned);
   };
 
-  const showBottomHud = mode === "display" && isGrid;
+ const showBottomHud = mode === "display" && isGrid && showFontSlider;
 
-  // ✅ QR choice actions
   const chooseDisplayFromQr = async () => {
     const b = qrBoard;
     setShowQrChoiceDialog(false);
     if (b == null) return;
-
-    // display => zoom the selected board (fullscreen)
     await openBoardFullscreen(b);
   };
 
@@ -587,9 +697,8 @@ export default function HomeScreen() {
     setShowQrChoiceDialog(false);
     if (b == null) return;
 
-    // scoring => fullscreen + open scoring screen with board nr
     try {
-      await ensureDocFullscreen(); // user gesture -> should succeed
+      await ensureDocFullscreen();
     } catch {}
 
     setInitialScoringBoard(b);
@@ -605,12 +714,23 @@ export default function HomeScreen() {
           onExit={() => setMode("display")}
           initialBoardNr={initialScoringBoard}
         />
+      ) : mode === "history" ? (
+        <HistoryScreen
+          clubId={clubId}
+          onExit={() => setMode("display")}
+        />
       ) : (
-        <View style={[styles.screen, { padding: safePad }]}>
-          {/* meglévő display UI marad ugyanúgy */}
-          {isGrid ? (
+        <View
+          style={[styles.screen, { padding: safePad }]}
+          onStartShouldSetResponder={() => true}
+          onResponderRelease={handleBackgroundTap}
+        >
+          {showBottomHud ? (
             <Pressable
-              onPress={onPickClub}
+              onPress={() => {
+                markUiAction();
+                onPickClub();
+              }}
               hitSlop={12}
               style={({ pressed }) => [
                 styles.clubChip,
@@ -618,15 +738,15 @@ export default function HomeScreen() {
                 pressed ? styles.clubChipPressed : null,
               ]}
             >
-              <Text style={styles.clubChipText}>{clubId}</Text>
+              <Text style={[styles.clubChipText, { fontSize: scaleFont(13, fontZoom) }]}>{clubId}</Text>
             </Pressable>
           ) : null}
 
-          {/* ✅ bottom-left: scoring + table (same style), ONLY in grid */}
           {showBottomHud ? (
             <View style={[styles.bottomLeftRow, { left: chipOffset, bottom: chipBottom }]}>
               <Pressable
                 onPress={async () => {
+                  markUiAction();
                   try {
                     await ensureDocFullscreen();
                   } catch {}
@@ -635,22 +755,35 @@ export default function HomeScreen() {
                 hitSlop={12}
                 style={({ pressed }) => [styles.scoringChip, pressed ? styles.clubChipPressed : null]}
               >
-                <Text style={styles.clubChipText}>scoring mode</Text>
+                <Text style={[styles.clubChipText, { fontSize: scaleFont(13, fontZoom) }]}>scoring mode</Text>
+              </Pressable>
+
+              <Pressable
+                onPress={() => {
+                  markUiAction();
+                  setMode("history");
+                }}
+                hitSlop={12}
+                style={({ pressed }) => [styles.scoringChip, pressed ? styles.clubChipPressed : null]}
+              >
+                <Text style={[styles.clubChipText, { fontSize: scaleFont(13, fontZoom) }]}>history</Text>
               </Pressable>
 
               {photoAvailable ? (
                 <Pressable
-                  onPress={() => setShowPhotoDialog(true)}
+                  onPress={() => {
+                    markUiAction();
+                    setShowPhotoDialog(true);
+                  }}
                   hitSlop={12}
                   style={({ pressed }) => [styles.scoringChip, pressed ? styles.clubChipPressed : null]}
                 >
-                  <Text style={styles.clubChipText}>table</Text>
+                  <Text style={[styles.clubChipText, { fontSize: scaleFont(13, fontZoom) }]}>table</Text>
                 </Pressable>
               ) : null}
             </View>
           ) : null}
 
-          {/* ✅ message bar: ONLY in grid + display */}
           {showBottomHud && messageVisible ? (
             <View style={[styles.subtitleBar, { bottom: chipOffset }]}>
               <View style={{ flex: 1, overflow: "hidden" }}>
@@ -660,6 +793,7 @@ export default function HomeScreen() {
                   style={[
                     styles.subtitleText,
                     {
+                      fontSize: scaleFont(15, fontZoom),
                       transform: [
                         {
                           translateX: marqueeX.interpolate({
@@ -675,8 +809,22 @@ export default function HomeScreen() {
                 </Animated.Text>
               </View>
 
-              <Pressable onPress={dismissMessage} hitSlop={12} style={styles.subtitleCloseBtn}>
-                <Text style={styles.subtitleCloseText}>✕</Text>
+              <Pressable
+                onPress={() => {
+                  markUiAction();
+                  dismissMessage();
+                }}
+                hitSlop={12}
+                style={styles.subtitleCloseBtn}
+              >
+                <Text
+                  style={[
+                    styles.subtitleCloseText,
+                    { fontSize: scaleFont(18, fontZoom), lineHeight: scaleFont(20, fontZoom) },
+                  ]}
+                >
+                  ✕
+                </Text>
               </Pressable>
             </View>
           ) : null}
@@ -690,9 +838,12 @@ export default function HomeScreen() {
                     data={boards[nr]}
                     isFullscreen={false}
                     onToggleFullscreen={() => openBoardFullscreen(nr)}
+                    onSaveHistory={() => saveBoardToHistory(nr)}
+                    onUiAction={markUiAction}
                     isAlt={idx % 2 === 1}
                     isFresh={!!freshMap[nr]}
-                    isStale={!!staleMap[nr]}   // ✅ NEW
+                    isStale={!!staleMap[nr]}
+                    fontZoom={fontZoom}
                   />
                 </View>
               ))}
@@ -704,14 +855,16 @@ export default function HomeScreen() {
                 data={boards[fullscreenBoard as number]}
                 isFullscreen={true}
                 onToggleFullscreen={() => setFullscreenBoard(null)}
+                onSaveHistory={() => saveBoardToHistory(fullscreenBoard as number)}
+                onUiAction={markUiAction}
                 isAlt={false}
                 isFresh={!!freshMap[fullscreenBoard as number]}
-                isStale={!!staleMap[fullscreenBoard as number]} // ✅ NEW
+                isStale={!!staleMap[fullscreenBoard as number]}
+                fontZoom={fontZoom}
               />
             </View>
           )}
 
-          {/* ✅ PHOTO MODAL (95% screen, X close) */}
           <Modal
             visible={showPhotoDialog}
             transparent
@@ -721,13 +874,20 @@ export default function HomeScreen() {
             <View style={styles.photoOverlay}>
               <View style={styles.photoCard}>
                 <View style={styles.photoHeader}>
-                  <Text style={styles.photoTitle}>Táblázat</Text>
+                  <Text style={[styles.photoTitle, { fontSize: scaleFont(16, fontZoom) }]}>Táblázat</Text>
                   <Pressable
                     onPress={() => setShowPhotoDialog(false)}
                     hitSlop={12}
                     style={styles.photoCloseBtn}
                   >
-                    <Text style={styles.photoCloseText}>✕</Text>
+                    <Text
+                      style={[
+                        styles.photoCloseText,
+                        { fontSize: scaleFont(18, fontZoom), lineHeight: scaleFont(20, fontZoom) },
+                      ]}
+                    >
+                      ✕
+                    </Text>
                   </Pressable>
                 </View>
 
@@ -738,23 +898,19 @@ export default function HomeScreen() {
             </View>
           </Modal>
 
-          {/* ✅ QR CHOICE DIALOG */}
           <Modal
             visible={showQrChoiceDialog}
             transparent
             animationType="fade"
             onRequestClose={() => setShowQrChoiceDialog(false)}
           >
-            {/* ✅ overlay: mellékattintásra zár */}
-            <Pressable
-              style={styles.modalOverlay}
-              onPress={() => setShowQrChoiceDialog(false)}
-            >
-              {/* ✅ card: ne záródjon be ha a kártyára nyomsz */}
+            <Pressable style={styles.modalOverlay} onPress={() => setShowQrChoiceDialog(false)}>
               <Pressable style={styles.modalCard} onPress={() => {}}>
-                <Text style={styles.modalTitle}>Hogyan szeretnéd használni?</Text>
+                <Text style={[styles.modalTitle, { fontSize: scaleFont(18, fontZoom) }]}>
+                  Hogyan szeretnéd használni?
+                </Text>
 
-                <Text style={styles.modalLabel}>
+                <Text style={[styles.modalLabel, { fontSize: scaleFont(14, fontZoom) }]}>
                   Club: {clubId} • Board: {qrBoard ?? "-"}
                 </Text>
 
@@ -764,7 +920,7 @@ export default function HomeScreen() {
                     onPress={() => void chooseScoringFromQr()}
                   >
                     <Image source={require("./keypad.png")} style={styles.modalBtnWhiteIcon} />
-                    <Text style={styles.modalBtnTextOk}>SCORING</Text>
+                    <Text style={[styles.modalBtnTextOk, { fontSize: scaleFont(14, fontZoom) }]}>SCORING</Text>
                   </Pressable>
 
                   <Pressable
@@ -772,12 +928,65 @@ export default function HomeScreen() {
                     onPress={() => void chooseDisplayFromQr()}
                   >
                     <Image source={require("./scoredisp.png")} style={styles.modalBtnIcon} />
-                    <Text style={styles.modalBtnTextGhost}>DISPLAY</Text>
+                    <Text style={[styles.modalBtnTextGhost, { fontSize: scaleFont(14, fontZoom) }]}>DISPLAY</Text>
                   </Pressable>
                 </View>
               </Pressable>
             </Pressable>
           </Modal>
+
+          {showFontSlider ? (
+            <View style={styles.fontZoomOverlay} pointerEvents="box-none">
+              <Pressable onPress={() => markUiAction()} style={styles.fontZoomPanel}>
+                <Text style={[styles.fontZoomLabel, { fontSize: scaleFont(12, fontZoom) }]}>
+                  Font zoom
+                </Text>
+
+                <View style={styles.fontZoomRow}>
+                  <Pressable
+                    onPress={() => {
+                      markUiAction();
+                      setFontZoom((z) => clamp(Math.round((z - FONT_ZOOM_STEP) * 10) / 10, FONT_ZOOM_MIN, FONT_ZOOM_MAX));
+                    }}
+                    style={styles.fontZoomBtn}
+                  >
+                    <Text style={styles.fontZoomBtnText}>−</Text>
+                  </Pressable>
+
+                  {typeof document !== "undefined" ? (
+                    <input
+                      type="range"
+                      min={FONT_ZOOM_MIN}
+                      max={FONT_ZOOM_MAX}
+                      step={0.1}
+                      value={fontZoom}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => {
+                        markUiAction();
+                        const next = clamp(Number((e.target as HTMLInputElement).value), FONT_ZOOM_MIN, FONT_ZOOM_MAX);
+                        setFontZoom(next);
+                      }}
+                      style={{ width: 180 }}
+                    />
+                  ) : null}
+
+                  <Pressable
+                    onPress={() => {
+                      markUiAction();
+                      setFontZoom((z) => clamp(Math.round((z + FONT_ZOOM_STEP) * 10) / 10, FONT_ZOOM_MIN, FONT_ZOOM_MAX));
+                    }}
+                    style={styles.fontZoomBtn}
+                  >
+                    <Text style={styles.fontZoomBtnText}>+</Text>
+                  </Pressable>
+                </View>
+
+                <Text style={[styles.fontZoomValue, { fontSize: scaleFont(12, fontZoom) }]}>
+                  {fontZoom.toFixed(1)}x
+                </Text>
+              </Pressable>
+            </View>
+          ) : null}
         </View>
       )}
     </View>
@@ -787,7 +996,6 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "#0b0f14" },
 
-  // base padding (works in portrait too)
   screen: { flex: 1, padding: 8 },
 
   grid: {
@@ -796,7 +1004,6 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
   },
 
-  // base item paddings; width/height are set dynamically
   gridItemBase: {
     padding: 6,
   },
@@ -806,7 +1013,6 @@ const styles = StyleSheet.create({
     padding: 6,
   },
 
-  // bottom-left row (scoring + table)
   bottomLeftRow: {
     position: "absolute",
     left: 10,
@@ -826,7 +1032,6 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
 
-  // floating club chip (bottom-right), only in grid
   clubChip: {
     position: "absolute",
     right: 10,
@@ -849,7 +1054,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
 
-  // ✅ subtitle / message bar (outside scoring screen, only in grid)
   subtitleBar: {
     position: "absolute",
     left: 0,
@@ -886,7 +1090,6 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
 
-  // photo modal
   photoOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.45)",
@@ -1043,6 +1246,24 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: "900",
   },
+  avgX3ValFsFill: {
+    flex: 1,
+    minWidth: 0,
+  },
+
+  avgX3LabelFsFill: {
+    width: "auto",
+    minWidth: 0,
+    flexShrink: 0,
+    paddingHorizontal: 12,
+  },
+
+  avgX3LabelFill: {
+    width: "auto",
+    minWidth: 0,
+    flexShrink: 0,
+    paddingHorizontal: 12,
+  },
 
   avgX3Row: {
     marginTop: 6,
@@ -1057,6 +1278,7 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     flexShrink: 1,
     flexBasis: "auto",
+    minWidth: 0,
     color: ACCENT_SCORE,
     fontSize: 22,
     fontWeight: "900",
@@ -1105,7 +1327,6 @@ const styles = StyleSheet.create({
 
   rightAlign: { textAlign: "right" },
 
-  // fullscreen typography boost
   nameBigFs: {
     fontSize: 32,
   },
@@ -1129,7 +1350,6 @@ const styles = StyleSheet.create({
     minWidth: 120,
   },
 
-  // ✅ QR CHOICE MODAL styles (copied/minimal, self-contained)
   modalBtnWithIcon: {
     flexDirection: "row",
     alignItems: "center",
@@ -1140,14 +1360,14 @@ const styles = StyleSheet.create({
   modalBtnIcon: {
     width: 18,
     height: 18,
-    tintColor:  "rgba(7, 7, 7, 0.7)",
+    tintColor: "rgba(7, 7, 7, 0.7)",
     resizeMode: "contain",
     opacity: 0.95,
   },
   modalBtnWhiteIcon: {
     width: 18,
     height: 18,
-    tintColor:  "rgba(252, 252, 252, 0.91)",
+    tintColor: "rgba(252, 252, 252, 0.91)",
     resizeMode: "contain",
     opacity: 0.95,
   },
@@ -1182,7 +1402,54 @@ const styles = StyleSheet.create({
   modalBtnOk: { backgroundColor: "#2f6f18" },
   modalBtnTextGhost: { fontWeight: "900", color: "rgba(0,0,0,0.75)" },
   modalBtnTextOk: { fontWeight: "900", color: "#ffffff" },
-
+  fontZoomOverlay: {
+    position: "absolute",
+    top: 16,
+    left: 0,
+    right: 0,
+    alignItems: "center",
+    zIndex: 4000,
+  },
+  fontZoomPanel: {
+    minWidth: 280,
+    backgroundColor: "rgba(0,0,0,0.82)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.16)",
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    alignItems: "center",
+    gap: 8,
+  },
+  fontZoomLabel: {
+    color: "rgba(255,255,255,0.78)",
+    fontWeight: "800",
+    fontSize: 12,
+  },
+  fontZoomRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  fontZoomBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.10)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  fontZoomBtnText: {
+    color: "white",
+    fontSize: 20,
+    fontWeight: "900",
+    lineHeight: 22,
+  },
+  fontZoomValue: {
+    color: "rgba(255,255,255,0.92)",
+    fontWeight: "900",
+    fontSize: 12,
+  },
   exitInline: { marginTop: 14, alignItems: "center" },
   exitInlineText: {
     color: "rgba(0,0,0,0.55)",

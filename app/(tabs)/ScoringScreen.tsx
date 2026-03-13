@@ -12,7 +12,7 @@ import {
 } from "react-native";
 
 // ✅ Firebase RTDB
-import { onValue, ref, set } from "firebase/database";
+import { onValue, push, ref, set } from "firebase/database";
 import { db } from "../../lib/firebase";
 
 type Props = {
@@ -220,6 +220,7 @@ export default function ScoringScreen({ onExit, clubId, initialBoardNr }: Props)
   const [pendingCheckout, setPendingCheckout] = useState<null | { player: 0 | 1; checkoutValue: number }>(null);
 
   const [boardNr, setBoardNr] = useState<number | null>(() => initialBoardNr ?? null);
+  const [saveInProgress, setSaveInProgress] = useState(false);
 
   useEffect(() => {
     setBoardNr(initialBoardNr ?? null);
@@ -332,6 +333,8 @@ export default function ScoringScreen({ onExit, clubId, initialBoardNr }: Props)
     return active === myPlayerIdx;
   }, [isOnline, myPlayerIdx, active]);
 
+  const canSaveStats = !!clubId?.trim() && boardNr != null;
+
   const pushUndo = () => {
     const cloned: [PlayerStats, PlayerStats] = [{ ...playersRef.current[0] }, { ...playersRef.current[1] }];
     undoStack.current.push({
@@ -385,18 +388,19 @@ export default function ScoringScreen({ onExit, clubId, initialBoardNr }: Props)
   // ======= FIREBASE PUSH (android struktúra) =======
   // ✅ ÚJ: timestamp előtt küldünk még 1 elemet: deviceInfo
   const buildAndroidValueString = () => {
-    const p1 = players[0];
-    const p2 = players[1];
+    const p1 = playersRef.current[0];
+    const p2 = playersRef.current[1];
     const ts = Date.now();
     const deviceInfo = deviceInfoRef.current;
+    const currentLastThrow = lastThrowRef.current;
 
     return [
       p1.name,
       p2.name,
       String(p1.score),
       String(p2.score),
-      String(lastThrow[0] || 0),
-      String(lastThrow[1] || 0),
+      String(currentLastThrow[0] || 0),
+      String(currentLastThrow[1] || 0),
       String(p1.legDartsThrown), // throws = current leg darts
       String(p2.legDartsThrown),
       String(p1.legs),
@@ -428,6 +432,22 @@ export default function ScoringScreen({ onExit, clubId, initialBoardNr }: Props)
       await set(ref(db, path), value);
     } catch {
       // silent
+    }
+  };
+
+  const saveStatsToHistory = async () => {
+    if (!canSaveStats || saveInProgress) return;
+
+    try {
+      setSaveInProgress(true);
+      const value = buildAndroidValueString().trim();
+      if (!value || value === "—") return;
+
+      await push(ref(db, `history/${clubId}/${boardNr}`), value);
+    } catch {
+      // silent
+    } finally {
+      setSaveInProgress(false);
     }
   };
 
@@ -840,16 +860,16 @@ export default function ScoringScreen({ onExit, clubId, initialBoardNr }: Props)
   // akkor halványítsuk a karikát, de legyen kattintható.
   const FRESH_LIMIT_MS = 2 * 60 * 1000;
 
-const [boardTailMap, setBoardTailMap] = useState<Record<number, { deviceInfo: string | null; ts: number }>>({
-  1: { deviceInfo: null, ts: 0 },
-  2: { deviceInfo: null, ts: 0 },
-  3: { deviceInfo: null, ts: 0 },
-  4: { deviceInfo: null, ts: 0 },
-  5: { deviceInfo: null, ts: 0 },
-  6: { deviceInfo: null, ts: 0 },
-  7: { deviceInfo: null, ts: 0 },
-  8: { deviceInfo: null, ts: 0 },
-});
+  const [boardTailMap, setBoardTailMap] = useState<Record<number, { deviceInfo: string | null; ts: number }>>({
+    1: { deviceInfo: null, ts: 0 },
+    2: { deviceInfo: null, ts: 0 },
+    3: { deviceInfo: null, ts: 0 },
+    4: { deviceInfo: null, ts: 0 },
+    5: { deviceInfo: null, ts: 0 },
+    6: { deviceInfo: null, ts: 0 },
+    7: { deviceInfo: null, ts: 0 },
+    8: { deviceInfo: null, ts: 0 },
+  });
 
   useEffect(() => {
     // csak akkor figyeljük, amikor valamelyik board picker nyitva van
@@ -863,7 +883,7 @@ const [boardTailMap, setBoardTailMap] = useState<Record<number, { deviceInfo: st
       const unsub = onValue(r, (snap) => {
         const raw = snap.val() == null ? null : String(snap.val());
         const tail = parseScoreTail(raw);
-          setBoardTailMap((prev) => ({ ...prev, [n]: tail }));
+        setBoardTailMap((prev) => ({ ...prev, [n]: tail }));
       });
       unsubs.push(unsub);
     }
@@ -976,17 +996,22 @@ const [boardTailMap, setBoardTailMap] = useState<Record<number, { deviceInfo: st
   };
 
   const renderBroadcastIcon = () => {
-    const src = require("./screen.png");
+    const src = require("./broadcast.png");
+    const isActive = boardNr != null;
+
     return (
-      <View style={styles.broadcastIconWrap} pointerEvents="none">
-        <Image
-          source={src}
-          style={[
-            styles.broadcastIcon,
-            boardNr == null ? styles.broadcastIconIdle : styles.broadcastIconActive,
-          ]}
-        />
-        {boardNr != null ? <Text style={styles.broadcastBoardNr}>{boardNr}</Text> : null}
+      <View style={styles.broadcastOuter} pointerEvents="none">
+        {/* nagy filled kör */}
+        <View style={[styles.broadcastCircle, isActive ? styles.broadcastCircleOn : styles.broadcastCircleOff]}>
+          <Image source={src} style={styles.broadcastIconInside} />
+        </View>
+
+        {/* kis badge jobb-alul, félig kilóg */}
+        {isActive ? (
+          <View style={styles.broadcastBadge}>
+            <Text style={styles.broadcastBadgeText}>{boardNr}</Text>
+          </View>
+        ) : null}
       </View>
     );
   };
@@ -1016,6 +1041,12 @@ const [boardTailMap, setBoardTailMap] = useState<Record<number, { deviceInfo: st
       <StatChip label="Won Avg." v1={format2AndroidLike(wonAvg(players[0]))} v2={format2AndroidLike(wonAvg(players[1]))} />
       <StatChip label="Best" v1={players[0].bestLegDarts ?? 0} v2={players[1].bestLegDarts ?? 0} />
       <StatChip label="H.Out" v1={players[0].highOut} v2={players[1].highOut} />
+      {canSaveStats ? (
+        <SaveStatChip
+          label={saveInProgress ? "saving..." : "save stats"}
+          onPress={() => void saveStatsToHistory()}
+        />
+      ) : null}
       <View style={styles.statsEdgeSpacer} />
     </ScrollView>
   );
@@ -1596,6 +1627,17 @@ function StatChip(props: { label: string; v1: any; v2: any }) {
   );
 }
 
+function SaveStatChip(props: { label: string; onPress: () => void }) {
+  return (
+    <Pressable
+      onPress={props.onPress}
+      style={({ pressed }) => [styles.statChip, styles.saveStatChip, pressed ? styles.saveStatChipPressed : null]}
+    >
+      <Text style={[styles.statChipText, styles.saveStatChipText]}>{props.label}</Text>
+    </Pressable>
+  );
+}
+
 function KeyFlex(props: { label: string; onPress: () => void; kind?: "num" | "action" | "quick" }) {
   const kind = props.kind ?? "num";
   return (
@@ -1763,6 +1805,64 @@ const styles = StyleSheet.create({
   keyText: { color: "#b3422a", fontWeight: "900", fontSize: 26 },
   keyTextAction: { color: "rgba(255,255,255,0.92)", fontSize: 18 },
 
+  broadcastOuter: {
+    width: 56,
+    height: 56,
+    position: "relative",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  // nagy filled kör
+  broadcastCircle: {
+    width: 56,
+    height: 56,
+    borderRadius: 999,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: "rgba(0,0,0,0.10)",
+  },
+
+  broadcastCircleOff: {
+    backgroundColor: "rgba(0,0,0,0.12)", // szürke filled
+  },
+
+  broadcastCircleOn: {
+    backgroundColor: "rgba(47,111,24,0.18)", // zöldes filled
+  },
+
+  // az ikon a körben
+  broadcastIconInside: {
+    width: 26,
+    height: 26,
+    resizeMode: "contain",
+    tintColor: "rgba(0,0,0,0.70)", // ha akarod: on/off külön is lehet
+  },
+
+  // kis badge a jobb alsó sarokban (félig kilóg)
+  broadcastBadge: {
+    position: "absolute",
+    right: -6,
+    bottom: -6,
+    width: 24,
+    height: 24,
+    borderRadius: 999,
+    backgroundColor: "#2f6f18",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: "#ffffff",
+    zIndex: 20,
+    elevation: 20,
+  },
+
+  broadcastBadgeText: {
+    color: "#ffffff",
+    fontWeight: "900",
+    fontSize: 12,
+  },
+
   // BOTTOM BAR
   statsBar: { paddingHorizontal: 6, paddingBottom: 6, paddingTop: 4, backgroundColor: "#ffffff" },
   statsBarInner: { alignItems: "center", gap: 8 },
@@ -1777,6 +1877,17 @@ const styles = StyleSheet.create({
   },
   statChipText: { color: "rgba(74,13,13,0.85)", fontWeight: "900" },
   statChipLabel: { color: "rgba(74,13,13,0.45)" },
+
+  saveStatChip: {
+    borderWidth: 1,
+    borderColor: "rgba(74,13,13,0.12)",
+  },
+  saveStatChipPressed: {
+    opacity: 0.78,
+  },
+  saveStatChipText: {
+    textTransform: "lowercase",
+  },
 
   // FLOATING CORNERS
   cornerCheck: {
