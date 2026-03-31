@@ -17,7 +17,6 @@ import {
 } from "react-native";
 import { db } from "../../lib/firebase";
 import HistoryScreen from "./HistoryScreen";
-import KrikettScreen from "./KrikettScreen";
 import ScoringScreen2 from "./ScoringScreen2";
 
 type BoardData = {
@@ -529,7 +528,6 @@ export default function HomeScreen() {
     return init;
   });
   const [initialScoringBoard, setInitialScoringBoard] = useState<number | null>(null);
-  const [initialKrikettBoard] = useState<number | null>(null);
 
   const { width, height } = useWindowDimensions();
 
@@ -539,7 +537,7 @@ export default function HomeScreen() {
 
   const [forcedLandscape, setForcedLandscape] = useState<boolean>(() => !!isProbablyDesktop);
   const isPortrait = !forcedLandscape && height >= width;
-    const [mode, setMode] = useState<"display" | "scoring" | "history" | "cricket">("display");
+  const [mode, setMode] = useState<"display" | "scoring" | "history">("display");
 
   const [fontZoom, setFontZoom] = useState(1);
   const [showHud, setShowHud] = useState(true);
@@ -921,13 +919,7 @@ const showExtraHud = showBottomHud && showFontSlider;
           onExit={() => setMode("display")}
           initialBoardNr={initialScoringBoard}
         />
-      )  : mode === "cricket" ? (
-              <KrikettScreen
-                clubId={clubId}
-                onExit={() => setMode("display")}
-                initialBoardNr={initialKrikettBoard}
-              />
-            ) : mode === "history" ? (
+      ) : mode === "history" ? (
         <HistoryScreen
           clubId={clubId}
           onExit={() => setMode("display")}
@@ -980,25 +972,6 @@ const showExtraHud = showBottomHud && showFontSlider;
 
   <Text style={[styles.scoringChipText, { fontSize: scaleFont(13, fontZoom) }]}>
     Scoring mode
-  </Text>
-  
-</Pressable>
-<Pressable
-  onPress={async () => {
-    markUiAction();
-    try {
-      await ensureDocFullscreen();
-    } catch {}
-    setMode("cricket");
-  }}
-  hitSlop={12}
-  style={({ pressed }) => [
-    styles.scoringChipNew,
-    pressed ? styles.scoringChipPressed : null,
-  ]}
->
-  <Text style={[styles.scoringChipText, { fontSize: scaleFont(13, fontZoom) }]}>
-    Cricket
   </Text>
 </Pressable>
     {showExtraHud ? (
@@ -1123,7 +1096,7 @@ const showExtraHud = showBottomHud && showFontSlider;
             <View style={styles.photoOverlay}>
               <View style={styles.photoCard}>
                 <View style={styles.photoHeader}>
-                  <Text style={[styles.photoTitle, { fontSize: scaleFont(16, fontZoom) }]}>Table</Text>
+                  <Text style={[styles.photoTitle, { fontSize: scaleFont(16, fontZoom) }]}>Táblázat</Text>
                   <Pressable
                     onPress={() => setShowPhotoDialog(false)}
                     hitSlop={12}
