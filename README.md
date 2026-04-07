@@ -49,13 +49,14 @@ Join our community of developers creating universal apps.
 - [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
 - [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
 
-C:\Users\Fazi\StudioProjects\dartsdisplay>npx expo start --web ez futtatja a localhoston
-C:\Users\Fazi\StudioProjects\dartsdisplay>npx expo export --platform web --clear - ez csinalja a buildet, dist-t
+C:\Users\Fazi\Documents\dartsdisplay>npx expo start --web ez futtatja a localhoston
+C:\Users\Fazi\Documents\dartsdisplay>npx expo export --platform web --clear - ez csinalja a buildet, dist-t
 
 build utan a generalt index.html head jenek vegen kicserelni a faviconos 
 <link-et <link rel="icon" href="data:," />-re
+<meta name="apple-mobile-web-app-capable" content="yes"> - t betenni a metakhoz
 
-C:\Users\Fazi>scp -r C:\Users\Fazi\StudioProjects\dartsdisplay\dist\* root@199.192.19.153:/var/www/dartsdisplay/   -ez masolja a szerverunk ala
+C:\Users\Fazi>scp -r C:\Users\Fazi\Documents\dartsdisplay\dist\* root@199.192.19.153:/var/www/dartsdisplay/   -ez masolja a szerverunk ala
 
 [09:04] [server1.backrec.com ~] # sudo find /var/www/dartsdisplay -type d -exec chmod 755 {} \;
 ez pedig chmod puttyban

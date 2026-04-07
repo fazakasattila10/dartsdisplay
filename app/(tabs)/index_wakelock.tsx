@@ -340,7 +340,7 @@ function BoardCard(props: {
 
       {!hasData ? (
         <Text style={[styles.emptyText, { fontSize: scaleFont(14, z) }]}>
-          No action on this board in the last hour.
+                No action on this board in the last hour.
         </Text>
       ) : (
         <View style={styles.bodyWrap}>

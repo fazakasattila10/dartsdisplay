@@ -1,7 +1,6 @@
 import { get, onValue, push, ref } from "firebase/database";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { StyleProp, ViewStyle } from "react-native";
-
+import type { DimensionValue, StyleProp, ViewStyle } from "react-native";
 import {
   Animated,
   Easing,
@@ -36,7 +35,8 @@ const STALE_LIMIT_MS = 60 * 60 * 1000; // 1 hour
 
 // colors
 const ACCENT_SCORE = "#b38f00";
-const ACCENT_LEGS = "#326b15";
+// const ACCENT_LEGS = "#326b15";
+const ACCENT_LEGS = "rgba(61,255,47,0.42)";
 
 const CARD_BG_A = "#2f2e2d";
 const CARD_BG_B = "#2f2e2d";
@@ -83,6 +83,51 @@ function parseBoard(raw: unknown): BoardData {
 function getPart(parts: string[], idx: number, fallback: string = "—"): string {
   const v = parts[idx];
   return v == null || v === "" ? fallback : v;
+}
+
+function isCricketBoardData(data: BoardData) {
+  return data.parts[0] === "cricket";
+}
+
+function parseCricketBoard(parts: string[]) {
+  if (parts[0] !== "cricket") return null;
+  const playerCount = Math.max(0, Math.min(8, Number(parts[1]) || 0));
+  const players: Array<{
+    name: string;
+    wins: string;
+    points: string;
+    m20: string;
+    m19: string;
+    m18: string;
+    m17: string;
+    m16: string;
+    m15: string;
+    bull: string;
+  }> = [];
+
+  let offset = 2;
+  for (let i = 0; i < playerCount; i += 1) {
+    players.push({
+      name: getPart(parts, offset + 0),
+      wins: getPart(parts, offset + 1, "0"),
+      points: getPart(parts, offset + 2, "0"),
+      m20: getPart(parts, offset + 3, "0"),
+      m19: getPart(parts, offset + 4, "0"),
+      m18: getPart(parts, offset + 5, "0"),
+      m17: getPart(parts, offset + 6, "0"),
+      m16: getPart(parts, offset + 7, "0"),
+      m15: getPart(parts, offset + 8, "0"),
+      bull: getPart(parts, offset + 9, "0"),
+    });
+    offset += 10;
+  }
+
+  return { players, round: getPart(parts, offset, "1") };
+}
+
+function marksToSlashesDisplay(v: string) {
+  const n = Math.max(0, Math.min(3, Number(v) || 0));
+  return "/".repeat(n);
 }
 
 function ensureDocFullscreen() {
@@ -177,35 +222,39 @@ function useDisplayWakeLock(enabled: boolean) {
   }, [enabled]);
 
   useEffect(() => {
-    if (!enabled) {
-      void releaseWakeLock();
-      return;
-    }
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    return;
+  }
 
+  if (!enabled) {
+    void releaseWakeLock();
+    return;
+  }
+
+  void requestWakeLock();
+
+  const retry = () => {
+    if (!enabled) return;
     void requestWakeLock();
+  };
 
-    const retry = () => {
-      if (!enabled) return;
-      void requestWakeLock();
-    };
+  document.addEventListener("visibilitychange", retry);
+  window.addEventListener("focus", retry);
+  window.addEventListener("pageshow", retry);
+  window.addEventListener("pointerdown", retry, { passive: true });
+  window.addEventListener("touchstart", retry, { passive: true });
+  window.addEventListener("keydown", retry);
 
-    document.addEventListener("visibilitychange", retry);
-    window.addEventListener("focus", retry);
-    window.addEventListener("pageshow", retry);
-    window.addEventListener("pointerdown", retry, { passive: true });
-    window.addEventListener("touchstart", retry, { passive: true });
-    window.addEventListener("keydown", retry);
-
-    return () => {
-      document.removeEventListener("visibilitychange", retry);
-      window.removeEventListener("focus", retry);
-      window.removeEventListener("pageshow", retry);
-      window.removeEventListener("pointerdown", retry);
-      window.removeEventListener("touchstart", retry);
-      window.removeEventListener("keydown", retry);
-      void releaseWakeLock();
-    };
-  }, [enabled, releaseWakeLock, requestWakeLock]);
+  return () => {
+    document.removeEventListener("visibilitychange", retry);
+    window.removeEventListener("focus", retry);
+    window.removeEventListener("pageshow", retry);
+    window.removeEventListener("pointerdown", retry);
+    window.removeEventListener("touchstart", retry);
+    window.removeEventListener("keydown", retry);
+    void releaseWakeLock();
+  };
+}, [enabled, releaseWakeLock, requestWakeLock]);
 
   return state;
 }
@@ -252,7 +301,50 @@ function toImageUri(raw: string): string {
 
   return `data:image/jpeg;base64,${s}`;
 }
+function CricketMarkBox(props: {
+  label: string;
+  marks: string;
+  fontZoom: number;
+  isFullscreen: boolean;
+}) {
+  const z = props.fontZoom;
+  const marks = Math.max(0, Math.min(3, Number(props.marks) || 0));
+  const fillWidth: DimensionValue = `${(marks / 3) * 100}%`;
 
+  const labelFontSize = scaleFont(props.isFullscreen ? 16 : 11, z);
+
+  return (
+    <View
+      style={[
+        styles.cricketMarkChip,
+        {
+          paddingVertical: props.isFullscreen ? 7 : 4,
+          paddingHorizontal: props.isFullscreen ? 20 : 12,
+          minWidth: labelFontSize * (props.label === "B." ? 4.7 : 4.7),
+        },
+      ]}
+    >
+      <View style={styles.cricketMarkChipBg}>
+        {marks > 0 ? (
+          <View style={[styles.cricketMarkChipFill, { width: fillWidth }]} />
+        ) : null}
+
+        <View style={[styles.cricketMarkDivider, styles.cricketMarkDivider1]} />
+        <View style={[styles.cricketMarkDivider, styles.cricketMarkDivider2]} />
+      </View>
+
+      <Text
+        style={[
+          styles.cricketMarkChipLabelCentered,
+          { fontSize: labelFontSize, lineHeight: labelFontSize * 1.05 },
+        ]}
+        numberOfLines={1}
+      >
+        {props.label}
+      </Text>
+    </View>
+  );
+}
 function BoardCard(props: {
   boardNr: number;
   data: BoardData;
@@ -268,19 +360,16 @@ function BoardCard(props: {
   const hasData = !props.isStale && props.data.raw !== "—" && props.data.raw !== "";
   const parts = props.data.parts;
   const z = props.fontZoom;
+  const isCricket = isCricketBoardData(props.data);
 
   const nameL = getPart(parts, 0);
   const nameR = getPart(parts, 1);
-
   const scoreL = getPart(parts, 2);
   const scoreR = getPart(parts, 3);
-
   const lastL = getPart(parts, 4);
   const lastR = getPart(parts, 5);
-
   const legsL = getPart(parts, 8);
   const legsR = getPart(parts, 9);
-
   const avgX3L = getPart(parts, 12);
   const avgX3R = getPart(parts, 13);
 
@@ -295,6 +384,7 @@ function BoardCard(props: {
       }
     : null;
   const badgeTextStyle = props.isFresh ? { color: BADGE_ACTIVE_TEXT } : { color: BADGE_TEXT_DEFAULT };
+  const cricket = isCricket ? parseCricketBoard(parts) : null;
 
   return (
     <View
@@ -305,7 +395,7 @@ function BoardCard(props: {
       ]}
     >
       <View style={styles.cardHeader}>
-        {props.onSaveHistory  ? (
+        {props.onSaveHistory ? (
           <Pressable
             onPress={() => {
               props.onUiAction();
@@ -314,14 +404,14 @@ function BoardCard(props: {
             hitSlop={10}
           >
             <View style={[styles.boardBadge, badgeBgStyle, badgeGlowStyle]}>
-              <Text style={[styles.boardBadgeText, badgeTextStyle, { fontSize: scaleFont(13, z) }]}>
+              <Text style={[styles.boardBadgeText, badgeTextStyle, { fontSize: scaleFont(13, z) }]}> 
                 {props.boardNr}
               </Text>
             </View>
           </Pressable>
         ) : (
           <View style={[styles.boardBadge, badgeBgStyle, badgeGlowStyle]}>
-            <Text style={[styles.boardBadgeText, badgeTextStyle, { fontSize: scaleFont(13, z) }]}>
+            <Text style={[styles.boardBadgeText, badgeTextStyle, { fontSize: scaleFont(13, z) }]}> 
               {props.boardNr}
             </Text>
           </View>
@@ -340,145 +430,104 @@ function BoardCard(props: {
       </View>
 
       {!hasData ? (
-        <Text style={[styles.emptyText, { fontSize: scaleFont(14, z) }]}>
-          No action on this board in the last hour.
-        </Text>
-      ) : (
+        <Text style={[styles.emptyText, { fontSize: scaleFont(14, z) }]}>No action on this board in the last hour.</Text>
+      ) : isCricket && cricket ?  (
+          <View style={styles.bodyWrap}>
+            <View
+              style={[
+                styles.cricketPlayersRow,
+                cricket.players.length === 2
+                  ? styles.cricketPlayersRow2
+                  : cricket.players.length === 3
+                    ? styles.cricketPlayersRow3
+                    : styles.cricketPlayersRow4,
+              ]}
+            >
+              {cricket.players.map((player, idx) => (
+                <React.Fragment key={`cricket-${idx}`}>
+                  {idx === 0 ? null : <View style={styles.cricketGap} />}
+
+                  <View style={styles.cricketPlayerCol}>
+                  <View style={styles.cricketPlayerHeader}>
+                    <Text
+                      style={[
+                        styles.cricketPlayerName,
+                        { fontSize: scaleFont(props.isFullscreen ? 26 : 14, z) },
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {player.name}
+                    </Text>
+
+                    <Text
+                      style={[
+                        styles.cricketPlayerWinsInline,
+                        { fontSize: scaleFont(props.isFullscreen ? 26 : 14, z) },
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {player.wins}
+                    </Text>
+                  </View>
+
+                  <Text
+                    style={[
+                      styles.cricketPlayerPoints,
+                      { fontSize: scaleFont(props.isFullscreen ? 34 : 18, z) },
+                    ]}
+                  >
+                    {player.points}
+                  </Text>
+
+                  <View
+                    style={[
+                      styles.cricketMarksStack,
+                      props.isFullscreen ? styles.cricketMarksStackLarge : null,
+                    ]}
+                  >
+                      <CricketMarkBox label="20" marks={player.m20} fontZoom={z} isFullscreen={props.isFullscreen} />
+                      <CricketMarkBox label="19" marks={player.m19} fontZoom={z} isFullscreen={props.isFullscreen} />
+                      <CricketMarkBox label="18" marks={player.m18} fontZoom={z} isFullscreen={props.isFullscreen} />
+                      <CricketMarkBox label="17" marks={player.m17} fontZoom={z} isFullscreen={props.isFullscreen} />
+                      <CricketMarkBox label="16" marks={player.m16} fontZoom={z} isFullscreen={props.isFullscreen} />
+                      <CricketMarkBox label="15" marks={player.m15} fontZoom={z} isFullscreen={props.isFullscreen} />
+                      <CricketMarkBox label="B." marks={player.bull} fontZoom={z} isFullscreen={props.isFullscreen} />
+                    </View>
+                  </View>
+                </React.Fragment>
+              ))}
+            </View>
+          </View>
+        ) : (
         <View style={styles.bodyWrap}>
-          <ScrollView
-            showsVerticalScrollIndicator={false}
-            overScrollMode="never"
-            bounces={false}
-            contentContainerStyle={{ paddingBottom: 40 }}
-          >
+          <ScrollView showsVerticalScrollIndicator={false} overScrollMode="never" bounces={false} contentContainerStyle={{ paddingBottom: 40 }}>
             <View style={styles.nameLegsRow}>
-              <Text
-                style={[
-                  styles.nameBig,
-                  { fontSize: scaleFont(props.isFullscreen ? 32 : 16, z) },
-                ]}
-                numberOfLines={1}
-              >
-                {nameL}
-              </Text>
-
+              <Text style={[styles.nameBig, { fontSize: scaleFont(props.isFullscreen ? 32 : 16, z) }]} numberOfLines={1}>{nameL}</Text>
               <View style={[styles.legsCenter, props.isFullscreen ? styles.legsCenterFs : null]}>
-                <Text
-                  style={[
-                    styles.legsBig,
-                    {
-                      fontSize: scaleFont(props.isFullscreen ? 52 : 26, z),
-                      lineHeight: scaleFont(props.isFullscreen ? 56 : 28, z),
-                    },
-                  ]}
-                  numberOfLines={1}
-                >
-                  {legsL}-{legsR}
-                </Text>
+                <Text style={[styles.legsBig, { fontSize: scaleFont(props.isFullscreen ? 52 : 26, z), lineHeight: scaleFont(props.isFullscreen ? 56 : 28, z) }]} numberOfLines={1}>{legsL}-{legsR}</Text>
               </View>
-
-              <Text
-                style={[
-                  styles.nameBig,
-                  styles.rightAlign,
-                  { fontSize: scaleFont(props.isFullscreen ? 32 : 16, z) },
-                ]}
-                numberOfLines={1}
-              >
-                {nameR}
-              </Text>
+              <Text style={[styles.nameBig, styles.rightAlign, { fontSize: scaleFont(props.isFullscreen ? 32 : 16, z) }]} numberOfLines={1}>{nameR}</Text>
             </View>
-
             <View style={styles.scoresRow}>
-              <Text
-                style={[
-                  styles.scoreBig,
-                  { fontSize: scaleFont(props.isFullscreen ? 72 : 36, z) },
-                ]}
-                numberOfLines={1}
-              >
-                {scoreL}
-              </Text>
-              <Text
-                style={[
-                  styles.scoreBig,
-                  styles.rightAlign,
-                  { fontSize: scaleFont(props.isFullscreen ? 72 : 36, z) },
-                ]}
-                numberOfLines={1}
-              >
-                {scoreR}
-              </Text>
+              <Text style={[styles.scoreBig, { fontSize: scaleFont(props.isFullscreen ? 72 : 36, z) }]} numberOfLines={1}>{scoreL}</Text>
+              <Text style={[styles.scoreBig, styles.rightAlign, { fontSize: scaleFont(props.isFullscreen ? 72 : 36, z) }]} numberOfLines={1}>{scoreR}</Text>
             </View>
-
             <View style={styles.lastRow}>
-              <Text
-                style={[
-                  styles.lastText,
-                  { fontSize: scaleFont(props.isFullscreen ? 44 : 22, z) },
-                ]}
-                numberOfLines={1}
-              >
-                {lastL}
-              </Text>
-              <Text
-                style={[
-                  styles.lastText,
-                  styles.rightAlign,
-                  { fontSize: scaleFont(props.isFullscreen ? 44 : 22, z) },
-                ]}
-                numberOfLines={1}
-              >
-                {lastR}
-              </Text>
+              <Text style={[styles.lastText, { fontSize: scaleFont(props.isFullscreen ? 44 : 22, z) }]} numberOfLines={1}>{lastL}</Text>
+              <Text style={[styles.lastText, styles.rightAlign, { fontSize: scaleFont(props.isFullscreen ? 44 : 22, z) }]} numberOfLines={1}>{lastR}</Text>
             </View>
-
             <View style={styles.avgX3Row}>
-              <Text
-                style={[
-                  styles.avgX3Val,
-                  props.isFullscreen ? styles.avgX3ValFsFill : null,
-                  { fontSize: scaleFont(props.isFullscreen ? 44 : 22, z) },
-                ]}
-                numberOfLines={1}
-              >
-                {avgX3L}
-              </Text>
-
-              <Text
-                style={[
-                  styles.avgX3Label,
-                  props.isFullscreen ? styles.avgX3LabelFsFill : null,
-                  !props.isFullscreen ? styles.avgX3LabelFill : null,
-                  { fontSize: scaleFont(props.isFullscreen ? 28 : 14, z) },
-                ]}
-                numberOfLines={1}
-              >
-                Avg.x3
-              </Text>
-
-              <Text
-                style={[
-                  styles.avgX3Val,
-                  styles.rightAlign,
-                  props.isFullscreen ? styles.avgX3ValFsFill : null,
-                  { fontSize: scaleFont(props.isFullscreen ? 44 : 22, z) },
-                ]}
-                numberOfLines={1}
-              >
-                {avgX3R}
-              </Text>
+              <Text style={[styles.avgX3Val, props.isFullscreen ? styles.avgX3ValFsFill : null, { fontSize: scaleFont(props.isFullscreen ? 44 : 22, z) }]} numberOfLines={1}>{avgX3L}</Text>
+              <Text style={[styles.avgX3Label, props.isFullscreen ? styles.avgX3LabelFsFill : null, !props.isFullscreen ? styles.avgX3LabelFill : null, { fontSize: scaleFont(props.isFullscreen ? 28 : 14, z) }]} numberOfLines={1}>Avg.x3</Text>
+              <Text style={[styles.avgX3Val, styles.rightAlign, props.isFullscreen ? styles.avgX3ValFsFill : null, { fontSize: scaleFont(props.isFullscreen ? 44 : 22, z) }]} numberOfLines={1}>{avgX3R}</Text>
             </View>
-
             <View style={styles.divider} />
-
             <StatRow left={getPart(parts, 6)} label="Throws" right={getPart(parts, 7)} fontZoom={z} />
             <StatRow left={getPart(parts, 10)} label="Avg." right={getPart(parts, 11)} fontZoom={z} />
             <StatRow left={getPart(parts, 14)} label="100+" right={getPart(parts, 15)} fontZoom={z} />
             <StatRow left={getPart(parts, 16)} label="140+" right={getPart(parts, 17)} fontZoom={z} />
             <StatRow left={getPart(parts, 18)} label="180+" right={getPart(parts, 19)} fontZoom={z} />
             <StatRow left={getPart(parts, 20)} label="H.out" right={getPart(parts, 21)} fontZoom={z} />
-
             <View style={{ height: 70 }} />
           </ScrollView>
         </View>
@@ -515,6 +564,16 @@ export default function HomeScreen() {
     BOARD_NRS.forEach((nr) => (init[nr] = parseBoard(null)));
     return init;
   });
+  const [scoreBoards, setScoreBoards] = useState<Record<number, BoardData>>(() => {
+    const init: Record<number, BoardData> = {};
+    BOARD_NRS.forEach((nr) => (init[nr] = parseBoard(null)));
+    return init;
+  });
+  const [cricketBoards, setCricketBoards] = useState<Record<number, BoardData>>(() => {
+    const init: Record<number, BoardData> = {};
+    BOARD_NRS.forEach((nr) => (init[nr] = parseBoard(null)));
+    return init;
+  });
 
   const [fullscreenBoard, setFullscreenBoard] = useState<number | null>(null);
 
@@ -529,7 +588,6 @@ export default function HomeScreen() {
     return init;
   });
   const [initialScoringBoard, setInitialScoringBoard] = useState<number | null>(null);
-  const [initialKrikettBoard] = useState<number | null>(null);
 
   const { width, height } = useWindowDimensions();
 
@@ -539,7 +597,7 @@ export default function HomeScreen() {
 
   const [forcedLandscape, setForcedLandscape] = useState<boolean>(() => !!isProbablyDesktop);
   const isPortrait = !forcedLandscape && height >= width;
-    const [mode, setMode] = useState<"display" | "scoring" | "history" | "cricket">("display");
+  const [mode, setMode] = useState<"display" | "scoring" | "cricket" | "history">("display");
 
   const [fontZoom, setFontZoom] = useState(1);
   const [showHud, setShowHud] = useState(true);
@@ -688,7 +746,13 @@ useEffect(() => {
   }, [forcedLandscape, width, height]);
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    if (
+      typeof window === "undefined" ||
+      !window.location ||
+      typeof window.location.search !== "string"
+    ) {
+      return;
+    }
 
     const qs = new URLSearchParams(window.location.search);
     const qClub = (qs.get("clubId") || qs.get("club") || "").trim().toLowerCase();
@@ -792,27 +856,55 @@ useEffect(() => {
 
   useEffect(() => {
     setFullscreenBoard(null);
-    setBoards(() => {
+    const emptyBoards = () => {
       const init: Record<number, BoardData> = {};
       BOARD_NRS.forEach((nr) => (init[nr] = parseBoard(null)));
       return init;
-    });
+    };
 
-    const unsubs = BOARD_NRS.map((nr) => {
-      const r = ref(db, `score/${clubId}/${nr}`);
-      return onValue(
-        r,
+    setBoards(emptyBoards());
+    setScoreBoards(emptyBoards());
+    setCricketBoards(emptyBoards());
+
+    const unsubs = BOARD_NRS.flatMap((nr) => {
+      const scoreRef = ref(db, `score/${clubId}/${nr}`);
+      const cricketRef = ref(db, `cricket/${clubId}/${nr}`);
+
+      const unsubScore = onValue(
+        scoreRef,
         (snap) => {
-          setBoards((prev) => ({ ...prev, [nr]: parseBoard(snap.val()) }));
+          setScoreBoards((prev) => ({ ...prev, [nr]: parseBoard(snap.val()) }));
         },
         (err) => {
           console.error("[RTDB ERROR]", `score/${clubId}/${nr}`, err?.message);
         }
       );
+
+      const unsubCricket = onValue(
+        cricketRef,
+        (snap) => {
+          setCricketBoards((prev) => ({ ...prev, [nr]: parseBoard(snap.val()) }));
+        },
+        (err) => {
+          console.error("[RTDB ERROR]", `cricket/${clubId}/${nr}`, err?.message);
+        }
+      );
+
+      return [unsubScore, unsubCricket];
     });
 
     return () => unsubs.forEach((u) => u());
   }, [clubId]);
+
+  useEffect(() => {
+    const nextBoards: Record<number, BoardData> = {};
+    BOARD_NRS.forEach((nr) => {
+      const scoreBoard = scoreBoards[nr] ?? parseBoard(null);
+      const cricketBoard = cricketBoards[nr] ?? parseBoard(null);
+      nextBoards[nr] = cricketBoard.timestamp > scoreBoard.timestamp ? cricketBoard : scoreBoard;
+    });
+    setBoards(nextBoards);
+  }, [scoreBoards, cricketBoards]);
 
   useEffect(() => {
     const check = () => {
@@ -875,7 +967,7 @@ useEffect(() => {
     try {
       const raw = boards[boardNr]?.raw ?? "";
       const value = raw.trim();
-      if (!value || value === "—") return;
+      if (!value || value === "—" || value.startsWith("cricket_")) return;
 
       await push(ref(db, `history/${clubId}/${boardNr}`), value);
     } catch (e) {
@@ -921,13 +1013,12 @@ const showExtraHud = showBottomHud && showFontSlider;
           onExit={() => setMode("display")}
           initialBoardNr={initialScoringBoard}
         />
-      )  : mode === "cricket" ? (
-              <KrikettScreen
-                clubId={clubId}
-                onExit={() => setMode("display")}
-                initialBoardNr={initialKrikettBoard}
-              />
-            ) : mode === "history" ? (
+      ) : mode === "cricket" ? (
+        <KrikettScreen
+          clubId={clubId}
+          onExit={() => setMode("display")}
+        />
+      ) : mode === "history" ? (
         <HistoryScreen
           clubId={clubId}
           onExit={() => setMode("display")}
@@ -979,28 +1070,27 @@ const showExtraHud = showBottomHud && showFontSlider;
   />
 
   <Text style={[styles.scoringChipText, { fontSize: scaleFont(13, fontZoom) }]}>
-    Scoring mode
-  </Text>
-  
-</Pressable>
-<Pressable
-  onPress={async () => {
-    markUiAction();
-    try {
-      await ensureDocFullscreen();
-    } catch {}
-    setMode("cricket");
-  }}
-  hitSlop={12}
-  style={({ pressed }) => [
-    styles.scoringChipNew,
-    pressed ? styles.scoringChipPressed : null,
-  ]}
->
-  <Text style={[styles.scoringChipText, { fontSize: scaleFont(13, fontZoom) }]}>
-    Cricket
+   501
   </Text>
 </Pressable>
+    <Pressable
+      onPress={async () => {
+        markUiAction();
+        try {
+          await ensureDocFullscreen();
+        } catch {}
+        setMode("cricket");
+      }}
+      hitSlop={12}
+      style={({ pressed }) => [
+        styles.scoringChipNew,
+        pressed ? styles.scoringChipPressed : null,
+      ]}
+    >
+      <Text style={[styles.scoringChipText, { fontSize: scaleFont(13, fontZoom) }]}>
+        Cricket
+      </Text>
+    </Pressable>
     {showExtraHud ? (
       <Pressable
         onPress={() => {
@@ -1087,7 +1177,7 @@ const showExtraHud = showBottomHud && showFontSlider;
                     data={boards[nr]}
                     isFullscreen={false}
                     onToggleFullscreen={() => openBoardFullscreen(nr)}
-                    onSaveHistory={() => saveBoardToHistory(nr)}
+                    onSaveHistory={isCricketBoardData(boards[nr]) ? undefined : () => saveBoardToHistory(nr)}
                     onUiAction={markUiAction}
                     isAlt={idx % 2 === 1}
                     isFresh={!!freshMap[nr]}
@@ -1104,7 +1194,7 @@ const showExtraHud = showBottomHud && showFontSlider;
                 data={boards[fullscreenBoard as number]}
                 isFullscreen={true}
                 onToggleFullscreen={() => setFullscreenBoard(null)}
-                onSaveHistory={() => saveBoardToHistory(fullscreenBoard as number)}
+                onSaveHistory={isCricketBoardData(boards[fullscreenBoard as number]) ? undefined : () => saveBoardToHistory(fullscreenBoard as number)}
                 onUiAction={markUiAction}
                 isAlt={false}
                 isFresh={!!freshMap[fullscreenBoard as number]}
@@ -1123,7 +1213,7 @@ const showExtraHud = showBottomHud && showFontSlider;
             <View style={styles.photoOverlay}>
               <View style={styles.photoCard}>
                 <View style={styles.photoHeader}>
-                  <Text style={[styles.photoTitle, { fontSize: scaleFont(16, fontZoom) }]}>Table</Text>
+                  <Text style={[styles.photoTitle, { fontSize: scaleFont(16, fontZoom) }]}>Táblázat</Text>
                   <Pressable
                     onPress={() => setShowPhotoDialog(false)}
                     hitSlop={12}
@@ -1481,36 +1571,42 @@ scoringChipText: {
   },
 
   card: {
-    flex: 1,
-    borderRadius: 18,
-    padding: 10,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.14)",
-    overflow: "hidden",
-  },
-  cardBase: { backgroundColor: CARD_BG_A },
-  cardAlt: { backgroundColor: CARD_BG_B },
+  flex: 1,
+  borderRadius: 18,
+  padding: 6,
+  borderWidth: 1,
+  borderColor: "rgba(255,255,255,0.14)",
+  overflow: "hidden",
+},
+cardBase: { backgroundColor: CARD_BG_A },
+cardAlt: { backgroundColor: CARD_BG_B },
 
-  cardGrid: {},
-  cardFullscreen: {
-    flex: 1,
-  },
+cardGrid: {},
+cardFullscreen: {
+  flex: 1,
+},
 
-  cardHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 6,
-  },
+cardHeader: {
+  position: "absolute",
+  bottom: 2,
+  left: 4,
+  right: 4,
+  zIndex: 20,
+  elevation: 8,
+  flexDirection: "row",
+  alignItems: "center",
+  justifyContent: "space-between",
+  pointerEvents: "box-none",
+},
 
-  boardBadge: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: BADGE_BG,
-    alignItems: "center",
-    justifyContent: "center",
-  },
+boardBadge: {
+  width: 28,
+  height: 28,
+  borderRadius: 14,
+  backgroundColor: BADGE_BG,
+  alignItems: "center",
+  justifyContent: "center",
+},
   boardBadgeText: {
     fontSize: 13,
     fontWeight: "900",
@@ -1531,10 +1627,11 @@ scoringChipText: {
     fontSize: 14,
   },
 
-  bodyWrap: {
-    flex: 1,
-    position: "relative",
-  },
+ bodyWrap: {
+  flex: 1,
+  position: "relative",
+  paddingTop: 10,
+},
 
   nameLegsRow: {
     flexDirection: "row",
@@ -1661,6 +1758,217 @@ scoringChipText: {
     fontWeight: "900",
     textAlign: "right",
   },
+    cricketWrap: {
+      paddingTop: 4,
+      paddingBottom: 8,
+      minWidth: "100%",
+    },
+
+    cricketWrapCentered: {
+      justifyContent: "center",
+    },
+
+    cricketTable: {
+      alignSelf: "center",
+    },
+
+    cricketRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      minHeight: 28,
+    },
+
+    cricketPlayerCell: {
+      minWidth: 92,
+      paddingHorizontal: 4,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+
+    cricketLabelCell: {
+      minWidth: 42,
+      paddingHorizontal: 2,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+
+   
+    cricketPlayersRow: {
+      flex: 1,
+      flexDirection: "row",
+      alignItems: "flex-start",
+    },
+
+    cricketPlayersRow2: {
+      justifyContent: "space-between",
+    },
+
+    cricketPlayersRow3: {
+      justifyContent: "space-between",
+    },
+
+    cricketPlayersRow4: {
+      justifyContent: "space-between",
+    },
+
+    cricketGap: {
+      flex: 1,
+    },
+    cricketPlayerCol: {
+      flex: 2,
+      minWidth: 0,
+      alignItems: "stretch",
+    },
+
+    cricketPlayerHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      marginBottom: 4,
+    },
+
+    cricketPlayerName: {
+      color: "white",
+      fontWeight: "900",
+      textAlign: "center",
+      flexShrink: 1,
+    },
+
+    cricketPlayerWinsInline: {
+      color: ACCENT_LEGS,
+      fontWeight: "900",
+      textAlign: "left",
+      marginLeft: 6,
+      flexShrink: 0,
+    },
+
+    cricketPlayerPoints: {
+      color: ACCENT_SCORE,
+      fontWeight: "900",
+      textAlign: "center",
+      marginTop: 0,
+      marginBottom: 8,
+    },
+    cricketMarksStack: {
+      alignItems: "center",
+      gap: 6,
+    },
+
+    cricketMarksStackLarge: {
+      gap: 14,
+    },
+
+    cricketMarkChip: {
+      borderRadius: 15,
+      borderWidth: 1,
+      
+      // borderColor: "rgba(255,255,255,0.16)",
+      borderColor: "rgba(12, 12, 12, 0.32)",
+      backgroundColor: "rgba(255, 255, 255, 0.19)",
+      overflow: "hidden",
+      justifyContent: "center",
+      alignItems: "center",
+      alignSelf: "center",
+      position: "relative",
+    },
+
+    cricketMarkChipBg: {
+      ...StyleSheet.absoluteFillObject,
+      position: "absolute",
+    },
+
+    cricketMarkChipFill: {
+      position: "absolute",
+      left: 0,
+      top: 0,
+      bottom: 0,
+      backgroundColor: "rgba(61,255,47,0.42)",
+    },
+
+    cricketMarkDivider: {
+      position: "absolute",
+      top: 0,
+      bottom: 0,
+      width: 2,
+      //backgroundColor: "rgba(210,210,210,0.32)",
+      backgroundColor: "rgba(12, 12, 12, 0.32)",
+    },
+
+    cricketMarkDivider1: {
+      left: "33.3333%",
+      marginLeft: -1,
+    },
+
+    cricketMarkDivider2: {
+      left: "66.6666%",
+      marginLeft: -1,
+    },
+
+    cricketMarkChipLabelCentered: {
+      color: "rgba(255,255,255,0.92)",
+      fontWeight: "700",
+      textAlign: "center",
+      zIndex: 2,
+    },
+   
+    cricketPlayerWins: {
+      color: ACCENT_LEGS,
+      fontWeight: "900",
+      textAlign: "center",
+      marginTop: 2,
+    },
+
+  
+    cricketMarkChipSmall: {
+      height: 28,
+      paddingHorizontal: 8,
+    },
+
+    cricketMarkChipLarge: {
+      height: 42,          // ~2.5–3x
+      paddingHorizontal: 18,
+    },
+    cricketMarkChipNum: {
+      width: 84,
+    },
+
+    cricketMarkChipBull: {
+      width: 84,
+    },
+
+   
+    cricketMarkChipLabel: {
+      width: 32,
+      color: "rgba(255,255,255,0.68)",
+      fontWeight: "700",
+      textAlign: "left",
+    },
+
+    cricketMarkChipValue: {
+      flex: 1,
+      minWidth: 24,
+      color: "rgba(255,255,255,0.92)",
+      fontWeight: "900",
+      textAlign: "center",
+    },
+    cricketMarkVal: {
+      color: "rgba(255,255,255,0.92)",
+      fontWeight: "900",
+      textAlign: "center",
+      lineHeight: 22,
+    },
+
+    cricketLabelText: {
+      color: "rgba(255,255,255,0.72)",
+      fontWeight: "900",
+      textAlign: "center",
+      lineHeight: 22,
+    },
+
+    cricketLabelSpacer: {
+      color: "transparent",
+      lineHeight: 22,
+    },
 
   rightAlign: { textAlign: "right" },
 

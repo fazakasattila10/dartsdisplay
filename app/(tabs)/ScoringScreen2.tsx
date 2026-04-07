@@ -304,35 +304,47 @@ function useDisplayWakeLock(enabled: boolean) {
   }, [enabled]);
 
   useEffect(() => {
-    if (!enabled) {
-      void releaseWakeLock();
-      return;
-    }
+  const hasDom =
+    typeof window !== 'undefined' &&
+    typeof document !== 'undefined' &&
+    typeof document.addEventListener === 'function' &&
+    typeof document.removeEventListener === 'function' &&
+    typeof window.addEventListener === 'function' &&
+    typeof window.removeEventListener === 'function';
 
+  if (!hasDom) {
+    return;
+  }
+
+  if (!enabled) {
+    void releaseWakeLock();
+    return;
+  }
+
+  void requestWakeLock();
+
+  const retry = () => {
+    if (!enabled) return;
     void requestWakeLock();
+  };
 
-    const retry = () => {
-      if (!enabled) return;
-      void requestWakeLock();
-    };
+  document.addEventListener('visibilitychange', retry);
+  window.addEventListener('focus', retry);
+  window.addEventListener('pageshow', retry);
+  window.addEventListener('pointerdown', retry, { passive: true });
+  window.addEventListener('touchstart', retry, { passive: true });
+  window.addEventListener('keydown', retry);
 
-    document.addEventListener('visibilitychange', retry);
-    window.addEventListener('focus', retry);
-    window.addEventListener('pageshow', retry);
-    window.addEventListener('pointerdown', retry, { passive: true });
-    window.addEventListener('touchstart', retry, { passive: true });
-    window.addEventListener('keydown', retry);
-
-    return () => {
-      document.removeEventListener('visibilitychange', retry);
-      window.removeEventListener('focus', retry);
-      window.removeEventListener('pageshow', retry);
-      window.removeEventListener('pointerdown', retry);
-      window.removeEventListener('touchstart', retry);
-      window.removeEventListener('keydown', retry);
-      void releaseWakeLock();
-    };
-  }, [enabled, releaseWakeLock, requestWakeLock]);
+  return () => {
+    document.removeEventListener('visibilitychange', retry);
+    window.removeEventListener('focus', retry);
+    window.removeEventListener('pageshow', retry);
+    window.removeEventListener('pointerdown', retry);
+    window.removeEventListener('touchstart', retry);
+    window.removeEventListener('keydown', retry);
+    void releaseWakeLock();
+  };
+}, [enabled, releaseWakeLock, requestWakeLock]);
 
   return state;
 }
@@ -832,7 +844,15 @@ const onUndo = () => {
     return () => unsubs.forEach((u) => u());
   }, [showMenuDialog2, clubId]);
   useEffect(() => {
-    if (typeof window === 'undefined') return;
+      const hasDom =
+      typeof window !== 'undefined' &&
+      typeof document !== 'undefined' &&
+      typeof window.addEventListener === 'function' &&
+      typeof window.removeEventListener === 'function';
+
+    if (!hasDom) {
+      return;
+    }
 
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -848,21 +868,24 @@ const onUndo = () => {
 
       // számok
       if (e.key >= '0' && e.key <= '9') {
-        e.preventDefault();
+        // e.preventDefault();
+        e?.preventDefault?.();
         onDigit(Number(e.key));
         return;
       }
 
       // enter = OK
       if (e.key === 'Enter') {
-        e.preventDefault();
+        // e.preventDefault();
+        e?.preventDefault?.();
         onOk();
         return;
       }
 
       // törlés
       if (e.key === 'Backspace') {
-        e.preventDefault();
+        // e.preventDefault();
+        e?.preventDefault?.();
         onDel();
         return;
       }
@@ -1873,7 +1896,8 @@ function KeyFlex(props: { label: string; onPress: () => void; kind?: 'num' | 'ac
   return (
     <Pressable
       onTouchStart={(e) => {
-        e.preventDefault(); // fontos!
+        // e.preventDefault(); // fontos!
+        e?.preventDefault?.();
         props.onPress();
       }}
       style={({ pressed }) => [
