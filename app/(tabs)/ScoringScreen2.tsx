@@ -1,8 +1,11 @@
-import { onValue, push, ref, set } from 'firebase/database';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as Location from 'expo-location';
+import { onValue, push, ref } from 'firebase/database';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Image,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -10,15 +13,19 @@ import {
   Text,
   TextInput,
   View,
-  useWindowDimensions,
+  useWindowDimensions
 } from 'react-native';
 import { db } from '../../lib/firebase';
+import { addWatchedId, buildBoardShareUrl, buildQrImageUrl, getOrCreateBoardId, getOrCreateDeviceId, parseBoardIdFromText, publishBoardRecord, requestBrowserLikeLocation } from './broadcastShared';
 import { generateVirtualLeg } from './virtualDarts';
-
 type Props = {
   onExit: () => void;
   clubId: string;
   initialBoardNr?: number | null;
+  onOpenCricket?: () => void;
+  onOpenDisplay?: () => void;
+  onOpenDisplayById?: (id: string) => void;
+  openNewGameRequestKey?: number;
 };
 
 type PlayerStats = {
@@ -304,51 +311,53 @@ function useDisplayWakeLock(enabled: boolean) {
   }, [enabled]);
 
   useEffect(() => {
-  const hasDom =
-    typeof window !== 'undefined' &&
-    typeof document !== 'undefined' &&
-    typeof document.addEventListener === 'function' &&
-    typeof document.removeEventListener === 'function' &&
-    typeof window.addEventListener === 'function' &&
-    typeof window.removeEventListener === 'function';
+      const hasDom =
+      typeof window !== 'undefined' &&
+      typeof document !== 'undefined' &&
+      typeof document.addEventListener === 'function' &&
+      typeof document.removeEventListener === 'function' &&
+      typeof window.addEventListener === 'function' &&
+      typeof window.removeEventListener === 'function';
 
-  if (!hasDom) {
-    return;
-  }
+    if (!hasDom) {
+      return;
+    }
+    if (typeof document === 'undefined' || typeof window === 'undefined') {
+      return;
+    }
+    if (!enabled) {
+      void releaseWakeLock();
+      return;
+    }
 
-  if (!enabled) {
-    void releaseWakeLock();
-    return;
-  }
-
-  void requestWakeLock();
-
-  const retry = () => {
-    if (!enabled) return;
     void requestWakeLock();
-  };
 
-  document.addEventListener('visibilitychange', retry);
-  window.addEventListener('focus', retry);
-  window.addEventListener('pageshow', retry);
-  window.addEventListener('pointerdown', retry, { passive: true });
-  window.addEventListener('touchstart', retry, { passive: true });
-  window.addEventListener('keydown', retry);
+    const retry = () => {
+      if (!enabled) return;
+      void requestWakeLock();
+    };
 
-  return () => {
-    document.removeEventListener('visibilitychange', retry);
-    window.removeEventListener('focus', retry);
-    window.removeEventListener('pageshow', retry);
-    window.removeEventListener('pointerdown', retry);
-    window.removeEventListener('touchstart', retry);
-    window.removeEventListener('keydown', retry);
-    void releaseWakeLock();
-  };
-}, [enabled, releaseWakeLock, requestWakeLock]);
+    document.addEventListener('visibilitychange', retry);
+    window.addEventListener('focus', retry);
+    window.addEventListener('pageshow', retry);
+    window.addEventListener('pointerdown', retry, { passive: true });
+    window.addEventListener('touchstart', retry, { passive: true });
+    window.addEventListener('keydown', retry);
+
+    return () => {
+      document.removeEventListener('visibilitychange', retry);
+      window.removeEventListener('focus', retry);
+      window.removeEventListener('pageshow', retry);
+      window.removeEventListener('pointerdown', retry);
+      window.removeEventListener('touchstart', retry);
+      window.removeEventListener('keydown', retry);
+      void releaseWakeLock();
+    };
+  }, [enabled, releaseWakeLock, requestWakeLock]);
 
   return state;
 }
-export default function ScoringScreen2({ onExit, clubId, initialBoardNr }: Props) {
+export default function ScoringScreen2({ onExit, clubId, initialBoardNr, onOpenCricket, onOpenDisplay, onOpenDisplayById, openNewGameRequestKey }: Props) {
   const { width, height } = useWindowDimensions();
   const isPortrait = height >= width;
   const wakeLock = useDisplayWakeLock(true);
@@ -364,9 +373,18 @@ export default function ScoringScreen2({ onExit, clubId, initialBoardNr }: Props
   const [showCheckout, setShowCheckout] = useState(false);
   const [pendingCheckout, setPendingCheckout] = useState<null | { player: 0 | 1; checkoutValue: number }>(null);
   const [boardNr, setBoardNr] = useState<number | null>(() => initialBoardNr ?? null);
+  const [boardId, setBoardId] = useState<string | null>(null);
+  const [showBroadcastDialog, setShowBroadcastDialog] = useState(false);
+  const [showLocationPermissionDialog, setShowLocationPermissionDialog] = useState(false);
+  const [showScanDialog, setShowScanDialog] = useState(false);
+  const [scanInput, setScanInput] = useState('');
+  const [qrActivated, setQrActivated] = useState(false);
+  const [locationCoords, setLocationCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [locationGranted, setLocationGranted] = useState(false);
   const [saveInProgress, setSaveInProgress] = useState(false);
   const [showNamesDialog, setShowNamesDialog] = useState(false);
   const [showMenuDialog1, setShowMenuDialog1] = useState(false);
+  const [showQuickMenu, setShowQuickMenu] = useState(false);
 
   const [showMenuName1Suggestions, setShowMenuName1Suggestions] = useState(false);
   const [showMenuName2Suggestions, setShowMenuName2Suggestions] = useState(false);
@@ -376,7 +394,10 @@ export default function ScoringScreen2({ onExit, clubId, initialBoardNr }: Props
   const [menuBoardTmp, setMenuBoardTmp] = useState<number | null>(null);
   const [warnedBusyBoard, setWarnedBusyBoard] = useState<number | null>(null);
   const [showOnlineInfo, setShowOnlineInfo] = useState(false);
-
+  const handledOpenNewGameKeyRef = useRef<number | null>(null);
+  const [showScannerScreen, setShowScannerScreen] = useState(false);
+  const [hasScannedQr, setHasScannedQr] = useState(false);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [matchConfig, setMatchConfig] = useState<MatchConfig>({
     vsVirtual: false,
     virtualLevel: initialVirtualPrefs.level,
@@ -407,7 +428,7 @@ export default function ScoringScreen2({ onExit, clubId, initialBoardNr }: Props
 >([]);
   const lastLocalSendRef = useRef<number>(0);
   const clientIdRef = useRef<string>(makeClientId());
-  const deviceInfoRef = useRef<string>(clientIdRef.current);
+  const deviceInfoRef = useRef<string>(getOrCreateDeviceId());
   const virtualPlanRef = useRef<VirtualPlanState>(null);
   const virtualTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -417,6 +438,95 @@ export default function ScoringScreen2({ onExit, clubId, initialBoardNr }: Props
   useEffect(() => { activeRef.current = active; }, [active]);
   useEffect(() => { hasLegStartedRef.current = hasLegStarted; }, [hasLegStarted]);
   useEffect(() => { setBoardNr(initialBoardNr ?? null); }, [initialBoardNr]);
+  const openBoardFromScannedText = useCallback((raw: string) => {
+  const parsed = parseBoardIdFromText(raw);
+  if (!parsed) return false;
+
+  addWatchedId(parsed);
+  setShowScannerScreen(false);
+  setShowScanDialog(false);
+  setShowBroadcastDialog(false);
+  setScanInput('');
+  setHasScannedQr(false);
+  onOpenDisplayById?.(parsed);
+  return true;
+}, [onOpenDisplayById]);
+const requestAppLocation = useCallback(async () => {
+  try {
+    if (Platform.OS === 'web') {
+      const coords = await requestBrowserLikeLocation();
+      if (coords) {
+        setLocationCoords(coords);
+        setLocationGranted(true);
+        return true;
+      }
+      setLocationCoords(null);
+      setLocationGranted(false);
+      return false;
+    }
+
+    const current = await Location.getForegroundPermissionsAsync();
+    let granted = current.status === 'granted';
+
+    if (!granted) {
+      const asked = await Location.requestForegroundPermissionsAsync();
+      granted = asked.status === 'granted';
+    }
+
+    if (!granted) {
+      setLocationCoords(null);
+      setLocationGranted(false);
+      return false;
+    }
+
+    const lastKnown = await Location.getLastKnownPositionAsync();
+    if (lastKnown?.coords) {
+      setLocationCoords({
+        lat: lastKnown.coords.latitude,
+        lng: lastKnown.coords.longitude,
+      });
+      setLocationGranted(true);
+      return true;
+    }
+
+    const currentPos = await Location.getCurrentPositionAsync({
+      accuracy: Location.Accuracy.Balanced,
+    });
+
+    setLocationCoords({
+      lat: currentPos.coords.latitude,
+      lng: currentPos.coords.longitude,
+    });
+    setLocationGranted(true);
+    return true;
+  } catch {
+    setLocationCoords(null);
+    setLocationGranted(false);
+    return false;
+  }
+}, []);
+  useEffect(() => {
+  void getOrCreateBoardId().then(setBoardId);
+
+  if (Platform.OS === 'web') {
+    void requestAppLocation();
+    return;
+  }
+
+  void Location.getForegroundPermissionsAsync()
+    .then(async (perm) => {
+      if (perm.status !== 'granted') {
+        setLocationCoords(null);
+        setLocationGranted(false);
+        return;
+      }
+      await requestAppLocation();
+    })
+    .catch(() => {
+      setLocationCoords(null);
+      setLocationGranted(false);
+    });
+}, [requestAppLocation]);
 
   const [myRole, setMyRole] = useState<null | 'L' | 'R'>(null);
   const [onlineDisabled, setOnlineDisabled] = useState(false);
@@ -440,7 +550,7 @@ export default function ScoringScreen2({ onExit, clubId, initialBoardNr }: Props
   const virtualSide = matchConfig.vsVirtual ? matchConfig.virtualSide : null;
   const activeIsHuman = virtualSide == null || active !== virtualSide;
   const canInteract = (isOnline ? (myPlayerIdx == null ? true : active === myPlayerIdx) : true) && activeIsHuman;
-  const canSaveStats = !!clubId?.trim() && boardNr != null;
+  const canSaveStats = true;
   const isCurrentVirtualMatch = matchConfig.vsVirtual;
 
   const avg = (p: PlayerStats) => (p.dartsThrownTotal > 0 ? p.pointsScoredTotal / p.dartsThrownTotal : 0);
@@ -523,10 +633,17 @@ const [pendingVirtualCheckout, setPendingVirtualCheckout] = useState<null | {
   }
 
   async function pushToFirebase() {
-    if (boardNr == null) return;
-    markLocalFirebaseSend();
+    if (!boardId) return;
+    if (!locationGranted && !qrActivated) return;
     try {
-      await set(ref(db, `score/${clubId}/${boardNr}`), buildAndroidValueString());
+      await publishBoardRecord({
+        boardId,
+        kind: 'score',
+        stats: buildAndroidValueString(),
+        deviceId: deviceInfoRef.current,
+        lat: locationGranted ? locationCoords?.lat ?? null : null,
+        lng: locationGranted ? locationCoords?.lng ?? null : null,
+      });
     } catch {}
   }
 
@@ -535,19 +652,15 @@ const [pendingVirtualCheckout, setPendingVirtualCheckout] = useState<null | {
     try {
       setSaveInProgress(true);
       const value = buildAndroidValueString().trim();
-      if (!value || value === '—') return;
-      await push(ref(db, `history/${clubId}/${boardNr}`), value);
+      if (!value || value === 'â€”') return;
+      await push(ref(db, `history/${deviceInfoRef.current}`), value);
     } catch {} finally {
       setSaveInProgress(false);
     }
   }
 
   async function writeThrow(side: 'L' | 'R', msg: ThrowMsg) {
-    if (boardNr == null) return;
-    markLocalFirebaseSend();
-    try {
-      await set(ref(db, `throws/${clubId}/${boardNr}/${side}`), msg);
-    } catch {}
+    return;
   }
   const playerIdxToSide = (pIdx: 0 | 1): 'L' | 'R' => (pIdx === 0 ? 'L' : 'R');
 
@@ -813,7 +926,7 @@ const onUndo = () => {
 
   if (undoStack.current.length === 0) setHasLegStarted(false);
 };
-  useEffect(() => { void pushToFirebase(); }, [players, lastThrow, boardNr]);
+  useEffect(() => { void pushToFirebase(); }, [players, lastThrow, boardId, locationGranted, qrActivated, locationCoords]);
 
   useEffect(() => {
     if (boardNr == null) {
@@ -843,57 +956,53 @@ const onUndo = () => {
     }));
     return () => unsubs.forEach((u) => u());
   }, [showMenuDialog2, clubId]);
-  useEffect(() => {
-      const hasDom =
-      typeof window !== 'undefined' &&
-      typeof document !== 'undefined' &&
-      typeof window.addEventListener === 'function' &&
-      typeof window.removeEventListener === 'function';
+ useEffect(() => {
+  const hasDom =
+    typeof window !== 'undefined' &&
+    typeof document !== 'undefined' &&
+    typeof document.addEventListener === 'function' &&
+    typeof document.removeEventListener === 'function' &&
+    typeof window.addEventListener === 'function' &&
+    typeof window.removeEventListener === 'function';
 
-    if (!hasDom) {
+  if (!hasDom) {
+    return;
+  }
+
+  const win = window as any;
+
+  const handleKeyDown = (e: any) => {
+    const target = e?.target as any;
+    const tag = String(target?.tagName || '').toLowerCase();
+
+    if (tag === 'input' || tag === 'textarea' || !!target?.isContentEditable) {
       return;
     }
 
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      const tag = (target?.tagName || '').toLowerCase();
+    if (!canInteract) return;
 
-      // ha inputba ír (pl. név dialog), NE nyúljunk bele
-      if (tag === 'input' || tag === 'textarea' || target?.isContentEditable) {
-        return;
-      }
+    if (e?.key >= '0' && e?.key <= '9') {
+      e.preventDefault?.();
+      onDigit(Number(e.key));
+      return;
+    }
 
-      // csak akkor működjön, ha tényleg lehet interakció
-      if (!canInteract) return;
+    if (e?.key === 'Enter') {
+      e.preventDefault?.();
+      onOk();
+      return;
+    }
 
-      // számok
-      if (e.key >= '0' && e.key <= '9') {
-        // e.preventDefault();
-        e?.preventDefault?.();
-        onDigit(Number(e.key));
-        return;
-      }
+    if (e?.key === 'Backspace') {
+      e.preventDefault?.();
+      onDel();
+      return;
+    }
+  };
 
-      // enter = OK
-      if (e.key === 'Enter') {
-        // e.preventDefault();
-        e?.preventDefault?.();
-        onOk();
-        return;
-      }
-
-      // törlés
-      if (e.key === 'Backspace') {
-        // e.preventDefault();
-        e?.preventDefault?.();
-        onDel();
-        return;
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [canInteract, input]);
+  win.addEventListener('keydown', handleKeyDown);
+  return () => win.removeEventListener('keydown', handleKeyDown);
+}, [canInteract, input]);
   useEffect(() => {
     resetOnlineState();
     if (boardNr == null || onlineDisabled || matchConfig.vsVirtual) return;
@@ -986,22 +1095,44 @@ const onUndo = () => {
   const isFresh = tail.ts > 0 && Date.now() - tail.ts <= FRESH_LIMIT_MS;
   if (!isFresh) return false;
 
-  // ha ugyanez az eszköz használta legutóbb, ne számítson foglaltnak
+  // ha ugyanez az eszkÃ¶z hasznÃ¡lta legutÃ³bb, ne szÃ¡mÃ­tson foglaltnak
   if (tail.deviceInfo && tail.deviceInfo === deviceInfoRef.current) return false;
 
   return true;
 };
 
-  const openMenu = () => {
-     ensureScoringFullscreen();
+
+  const buildDraftFromCurrent = (): SetupDraft => {
     const persisted = loadVirtualPrefs();
-    setDraft({
+    return {
       player1: matchConfig.vsVirtual ? (matchConfig.virtualSide === 0 ? players[1].name : players[0].name) : players[0].name,
       player2: matchConfig.vsVirtual ? players[matchConfig.virtualSide].name : players[1].name,
       vsVirtual: matchConfig.vsVirtual || persisted.enabled,
       virtualLevel: matchConfig.vsVirtual ? matchConfig.virtualLevel : persisted.level,
       virtualSide: matchConfig.vsVirtual ? matchConfig.virtualSide : persisted.side,
-    });
+    };
+  };
+
+  const replayCurrentMatch = () => {
+    const replayDraft = buildDraftFromCurrent();
+    setDraft(replayDraft);
+    setShowQuickMenu(false);
+    setShowMenuDialog1(false);
+    setShowMenuDialog2(false);
+    startGameFromSetup(boardNr != null, boardNr, replayDraft);
+  };
+
+  useEffect(() => {
+    if (openNewGameRequestKey == null) return;
+    if (handledOpenNewGameKeyRef.current === openNewGameRequestKey) return;
+    handledOpenNewGameKeyRef.current = openNewGameRequestKey;
+    openMenu();
+  }, [openNewGameRequestKey]);
+
+  const openMenu = () => {
+     ensureScoringFullscreen();
+    setShowQuickMenu(false);
+    setDraft(buildDraftFromCurrent());
     setName1Touched(false);
     setName2Touched(false);
     setShowOnlineInfo(false);
@@ -1063,13 +1194,7 @@ const setTmpNamesFromCurrent = () => {
   setShowMenuDialog1(false);
   setWarnedBusyBoard(null);
   setMenuBoardTmp(null);
-
-  if (!clubId?.trim()) {
-    startGameFromSetup(false);
-    return;
-  }
-
-  setShowMenuDialog2(true);
+  startGameFromSetup(false);
 };
   const toggleDraftVirtualSwap = () => setDraft((prev) => ({ ...prev, virtualSide: prev.virtualSide === 0 ? 1 : 0 }));
   const swapHumanNames = () => setDraft((prev) => ({ ...prev, player1: prev.player2, player2: prev.player1 }));
@@ -1098,21 +1223,22 @@ const blurActiveElement = () => {
   const el = document.activeElement as HTMLElement | null;
   el?.blur?.();
 };
-const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null) => {
+const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null, draftOverride?: SetupDraft) => {
+  const sourceDraft = draftOverride ?? draft;
   blurActiveElement();
   const selectedBoard = withBoard ? (forcedBoard ?? menuBoardTmp) : null;
     const nextMatchConfig: MatchConfig = {
-      vsVirtual: draft.vsVirtual,
-      virtualLevel: draft.virtualLevel,
-      virtualSide: draft.virtualSide,
+      vsVirtual: sourceDraft.vsVirtual,
+      virtualLevel: sourceDraft.virtualLevel,
+      virtualSide: sourceDraft.virtualSide,
     };
     setMatchConfig(nextMatchConfig);
-    saveVirtualPrefs({ enabled: draft.vsVirtual, level: draft.virtualLevel, side: draft.virtualSide });
-    const namesToStore = draft.vsVirtual
-          ? [(draft.player1 || 'Player').trim()]
+    saveVirtualPrefs({ enabled: sourceDraft.vsVirtual, level: sourceDraft.virtualLevel, side: sourceDraft.virtualSide });
+    const namesToStore = sourceDraft.vsVirtual
+          ? [(sourceDraft.player1 || 'Player').trim()]
           : [
-              (draft.player1 || 'PL.1').trim(),
-              (draft.player2 || 'PL.2').trim(),
+              (sourceDraft.player1 || 'PL.1').trim(),
+              (sourceDraft.player2 || 'PL.2').trim(),
             ];
 
         const nextHistory = Array.from(
@@ -1126,10 +1252,10 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null) => 
         savePlayerNameHistory(nextHistory);
     let p1: PlayerStats;
     let p2: PlayerStats;
-    if (draft.vsVirtual) {
-      const humanName = (draft.player1 || 'Player').trim() || 'Player';
-      const virtualName = `Lv.${draft.virtualLevel}`;
-      if (draft.virtualSide === 0) {
+    if (sourceDraft.vsVirtual) {
+      const humanName = (sourceDraft.player1 || 'Player').trim() || 'Player';
+      const virtualName = `Lv.${sourceDraft.virtualLevel}`;
+      if (sourceDraft.virtualSide === 0) {
         p1 = freshPlayer(virtualName);
         p2 = freshPlayer(humanName);
       } else {
@@ -1137,8 +1263,8 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null) => 
         p2 = freshPlayer(virtualName);
       }
     } else {
-      p1 = freshPlayer((draft.player1 || 'PL.1').trim() || 'PL.1');
-      p2 = freshPlayer((draft.player2 || 'PL.2').trim() || 'PL.2');
+      p1 = freshPlayer((sourceDraft.player1 || 'PL.1').trim() || 'PL.1');
+      p2 = freshPlayer((sourceDraft.player2 || 'PL.2').trim() || 'PL.2');
     }
 
     const nextPlayers: [PlayerStats, PlayerStats] = [p1, p2];
@@ -1159,7 +1285,7 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null) => 
     setOnlineDisabled(false);
     resetOnlineState();
     setShowMenuDialog2(false);
-    if (draft.vsVirtual) prepareVirtualPlan(draft.virtualLevel);
+    if (sourceDraft.vsVirtual) prepareVirtualPlan(sourceDraft.virtualLevel);
     else virtualPlanRef.current = null;
   };
 
@@ -1180,7 +1306,7 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null) => 
 
   const renderBroadcastIcon = () => {
     const src = require('./broadcast.png');
-    const isActive = boardNr != null;
+    const isActive = !!boardId && (locationGranted || qrActivated);
     return (
       <View style={styles.broadcastOuter} pointerEvents="none">
         <View style={[styles.broadcastCircle, isActive ? styles.broadcastCircleOn : styles.broadcastCircleOff]}>
@@ -1188,7 +1314,7 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null) => 
         </View>
         {isActive ? (
           <View style={styles.broadcastBadge}>
-            <Text style={styles.broadcastBadgeText}>{boardNr}</Text>
+            <Text style={styles.broadcastBadgeText}>QR</Text>
           </View>
         ) : null}
       </View>
@@ -1243,7 +1369,7 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null) => 
             <Text style={styles.scoreBigLeft} numberOfLines={1}>{players[0].score}</Text>
             <DualInput side="left" visible={active === 0 && canInteract} value={active === 0 ? input : ''} onChangeText={safeSetInputWith180Limit} />
           </View>
-          <Pressable onPress={() => setShowBoardDialog(true)} hitSlop={10} style={styles.broadcastMid}>{renderBroadcastIcon()}</Pressable>
+          <Pressable onPress={() => { if (boardId) { setQrActivated(true); setShowBroadcastDialog(true); void pushToFirebase(); } }} hitSlop={10} style={styles.broadcastMid}>{renderBroadcastIcon()}</Pressable>
           <View style={[styles.scoreSideLandscape, styles.scoreSideLandscapeRight]}>
             <DualInput side="right" visible={active === 1 && canInteract} value={active === 1 ? input : ''} onChangeText={safeSetInputWith180Limit} />
             <Text style={styles.scoreBigRight} numberOfLines={1}>{players[1].score}</Text>
@@ -1262,7 +1388,7 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null) => 
           </View>
           <View style={styles.inputsRowPortrait}>
             <DualInput side="left" visible={active === 0 && canInteract} value={active === 0 ? input : ''} onChangeText={safeSetInputWith180Limit} />
-            <Pressable onPress={() => setShowBoardDialog(true)} hitSlop={10} style={styles.broadcastMidPortrait}>{renderBroadcastIcon()}</Pressable>
+            <Pressable onPress={() => { if (boardId) { setQrActivated(true); setShowBroadcastDialog(true); void pushToFirebase(); } }} hitSlop={10} style={styles.broadcastMidPortrait}>{renderBroadcastIcon()}</Pressable>
             <DualInput side="right" visible={active === 1 && canInteract} value={active === 1 ? input : ''} onChangeText={safeSetInputWith180Limit} />
           </View>
         </>
@@ -1345,43 +1471,230 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null) => 
             style={styles.cornerMenu}
             onPress={() => {
               blurActiveElement();
-              openMenu();
+              setShowQuickMenu((v) => !v);
             }}
           >
-          <Text style={styles.cornerText}>☰</Text>
+          <Text style={styles.cornerText}>â˜°</Text>
         </Pressable>
       </View>
 
-
-      <Modal visible={showBoardDialog} transparent animationType="fade" onRequestClose={() => setShowBoardDialog(false)}>
-        <View style={styles.modalOverlay}><View style={styles.modalCard}>
-          <Text style={styles.modalLabel}>Board Nr</Text>
-          {!!clubId?.trim() ? (
-            <>
-              <View style={styles.boardPickGrid}>
-                {[1,2,3,4,5,6,7,8].map((n) => {
-                  const selected = boardNr === n;
-                  const dim = shouldDimBoardCircle(n) && !selected;
-                  return (
-                    <Pressable key={n} onPress={() => setBoardNr(selected ? null : n)} style={({ pressed }) => [styles.boardPickCircle, selected ? styles.boardPickCircleOn : styles.boardPickCircleOff, dim ? styles.boardPickCircleDim : null, pressed ? { opacity: 0.8 } : null]}>
-                      <Text style={[styles.boardPickText, selected ? styles.boardPickTextOn : styles.boardPickTextOff, dim ? styles.boardPickTextDim : null]}>{n}</Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-              <Text style={styles.modalHintSmall}>Club: {clubId} • Current: {boardNr ?? '-'}</Text>
-            </>
-          ) : (
-            <Text style={styles.modalHintSmall}>No club selected.</Text>
-          )}
-          <View style={styles.modalBtns}>
-            <Pressable style={[styles.modalBtn, styles.modalBtnGhost]} onPress={() => setShowBoardDialog(false)}><Text style={styles.modalBtnTextGhost}>Cancel</Text></Pressable>
-            <Pressable style={[styles.modalBtn, styles.modalBtnOk]} onPress={() => setShowBoardDialog(false)}><Text style={styles.modalBtnTextOk}>OK</Text></Pressable>
+      <Modal visible={showQuickMenu} transparent animationType="fade" onRequestClose={() => setShowQuickMenu(false)}>
+        <Pressable style={styles.quickMenuOverlay} onPress={() => setShowQuickMenu(false)}>
+          <View style={styles.quickMenuCard}>
+            <Pressable style={styles.quickMenuItem} onPress={() => { setShowQuickMenu(false); openMenu(); }}>
+              <Text style={styles.quickMenuItemText}>new 501</Text>
+            </Pressable>
+            <Pressable style={styles.quickMenuItem} onPress={() => { setShowQuickMenu(false); onOpenCricket?.(); }}>
+              <Text style={styles.quickMenuItemText}>new Cricket</Text>
+            </Pressable>
+            <Pressable style={styles.quickMenuItem} onPress={() => { setShowQuickMenu(false); onOpenDisplay?.(); }}>
+              <Text style={styles.quickMenuItemText}>Big Display</Text>
+            </Pressable>
+            <Pressable style={styles.quickMenuItem} onPress={replayCurrentMatch}>
+              <Text style={styles.quickMenuItemText}>re-play</Text>
+            </Pressable>
           </View>
-        </View></View>
+        </Pressable>
       </Modal>
+      <Modal
+        visible={showBroadcastDialog}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowBroadcastDialog(false)}
+      >
+        <Pressable style={styles.modalOverlay} onPress={() => setShowBroadcastDialog(false)}>
+          <Pressable style={styles.modalCard} onPress={() => {}}>
+            <Text style={styles.modalTitle}>Broadcast</Text>
+            <Text style={styles.modalLabel}>
+              Scan this with another device for display.
+            </Text>
 
-      
+            {boardId ? (
+              <Image
+                source={{ uri: buildQrImageUrl(buildBoardShareUrl(boardId)) }}
+                style={styles.qrPreviewLarge}
+              />
+            ) : null}
+
+            <Text selectable style={styles.modalHintSmall}>
+              {boardId ? buildBoardShareUrl(boardId) : 'Generating...'}
+            </Text>
+
+            <Text style={styles.orLabel}>OR</Text>
+
+            <View style={styles.modalBtnsSingle}>
+              <Pressable
+                style={[styles.modalBtn, styles.modalBtnOk]}
+                onPress={async () => {
+                  const granted = cameraPermission?.granted || (await requestCameraPermission())?.granted;
+                  if (!granted) return;
+                  setShowBroadcastDialog(false);
+                  setShowScannerScreen(true);
+                  setHasScannedQr(false);
+                }}
+              >
+                <Text style={styles.modalBtnTextOk}>Scan another device</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    <Modal
+      visible={showLocationPermissionDialog}
+      transparent
+      animationType="fade"
+      onRequestClose={() => setShowLocationPermissionDialog(false)}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalCard}>
+          <Text style={styles.modalTitle}>Location access</Text>
+          <Text style={styles.modalLabel}>
+            To use the display function easily, please allow location access.
+          </Text>
+
+          <View style={styles.modalBtns}>
+            <Pressable
+              style={[styles.modalBtn, styles.modalBtnGhost]}
+              onPress={() => setShowLocationPermissionDialog(false)}
+            >
+              <Text style={styles.modalBtnTextGhost}>Not now</Text>
+            </Pressable>
+
+            <Pressable
+              style={[styles.modalBtn, styles.modalBtnOk]}
+              onPress={async () => {
+                const ok = await requestAppLocation();
+                setShowLocationPermissionDialog(false);
+                if (ok) {
+                  setQrActivated(true);
+                  setShowBroadcastDialog(true);
+                }
+              }}
+            >
+              <Text style={styles.modalBtnTextOk}>Continue</Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    </Modal>
+      <Modal
+        visible={showScanDialog}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowScanDialog(false)}
+      >
+        <Pressable style={styles.modalOverlay} onPress={() => setShowScanDialog(false)}>
+          <Pressable style={styles.modalCard} onPress={() => {}}>
+            <Text style={styles.modalTitle}>Open board display</Text>
+            <Text style={styles.modalLabel}>
+              Paste a QR URL or board ID manually.
+            </Text>
+
+            <TextInput
+              value={scanInput}
+              onChangeText={setScanInput}
+              style={styles.modalInput}
+              placeholder="Paste QR url or board id"
+              placeholderTextColor="rgba(0,0,0,0.45)"
+              autoCapitalize="characters"
+              autoCorrect={false}
+            />
+
+            <View style={styles.modalBtnsSingle}>
+              <Pressable
+                style={[styles.modalBtn, styles.modalBtnOk]}
+                onPress={() => {
+                  openBoardFromScannedText(scanInput);
+                }}
+              >
+                <Text style={styles.modalBtnTextOk}>Open manually</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+      <Modal
+        visible={showScannerScreen}
+        animationType="slide"
+        onRequestClose={() => {
+          setShowScannerScreen(false);
+          setHasScannedQr(false);
+        }}
+      >
+        <View style={styles.scannerScreen}>
+          {cameraPermission?.granted ? (
+            <CameraView
+              style={styles.scannerCamera}
+              barcodeScannerSettings={{
+                barcodeTypes: ['qr'],
+              }}
+              onBarcodeScanned={
+                hasScannedQr
+                  ? undefined
+                  : ({ data }) => {
+                      setHasScannedQr(true);
+                      const ok = openBoardFromScannedText(String(data || ''));
+                      if (!ok) {
+                        setShowScannerScreen(false);
+                        setShowScanDialog(true);
+                        setScanInput(String(data || ''));
+                        setHasScannedQr(false);
+                      }
+                    }
+              }
+            />
+          ) : (
+            <View style={styles.scannerFallback}>
+              <Text style={styles.modalTitle}>Camera permission needed</Text>
+              <Text style={styles.modalLabel}>
+                Please allow camera access to scan a QR code.
+              </Text>
+              <View style={styles.modalBtnsSingle}>
+                <Pressable
+                  style={[styles.modalBtn, styles.modalBtnOk]}
+                  onPress={async () => {
+                    await requestCameraPermission();
+                  }}
+                >
+                  <Text style={styles.modalBtnTextOk}>Allow camera</Text>
+                </Pressable>
+              </View>
+            </View>
+          )}
+
+          <View style={styles.scannerHud}>
+            <Text style={styles.scannerTitle}>Scan another device</Text>
+            <Text style={styles.scannerHint}>
+              Point the camera at the QR code shown on the other device.
+            </Text>
+
+            <View style={styles.scannerFrame} />
+
+            <View style={styles.scannerBottomActions}>
+              <Pressable
+                style={[styles.modalBtn, styles.modalBtnGhost, styles.scannerBottomBtn]}
+                onPress={() => {
+                  setShowScannerScreen(false);
+                  setHasScannedQr(false);
+                  setShowScanDialog(true);
+                }}
+              >
+                <Text style={styles.modalBtnTextGhost}>Enter manually</Text>
+              </Pressable>
+
+              <Pressable
+                style={[styles.modalBtn, styles.modalBtnOk, styles.scannerBottomBtn]}
+                onPress={() => {
+                  setShowScannerScreen(false);
+                  setHasScannedQr(false);
+                }}
+              >
+                <Text style={styles.modalBtnTextOk}>Close</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
       <Modal visible={showMenuDialog1} transparent animationType="fade" onRequestClose={() => setShowMenuDialog1(false)}>
         <Pressable
           style={styles.modalOverlay}
@@ -1580,7 +1893,7 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null) => 
               )}
 
               <Pressable onPress={draft.vsVirtual ? toggleDraftVirtualSwap : swapHumanNames} hitSlop={10} style={styles.swapBtnBetween}>
-                <Text style={styles.swapBtnText}>⇄</Text>
+                <Text style={styles.swapBtnText}>â‡„</Text>
               </Pressable>
             </View>
 
@@ -1642,7 +1955,7 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null) => 
         </Pressable>
       </Modal>
 
-      <Modal visible={showMenuDialog2} transparent animationType="fade" onRequestClose={() => setShowMenuDialog2(false)}>
+      <Modal visible={false && showMenuDialog2} transparent animationType="fade" onRequestClose={() => setShowMenuDialog2(false)}>
         <Pressable style={styles.modalOverlay} onPress={() => setShowMenuDialog2(false)}>
           <Pressable style={styles.modalCard} onPress={() => {}}>
             {!!clubId?.trim() ? (
@@ -1670,7 +1983,7 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null) => 
               </View>
             ) : null}
 
-            {showOnlineInfo && !draft.vsVirtual ? <Text style={styles.onlineInfoText}>Az ONLINE meccshez nem kell mást tennetek, csak ugyanazt a pályát kiválasztanotok mindketten és Start Game.</Text> : null} */}
+            {showOnlineInfo && !draft.vsVirtual ? <Text style={styles.onlineInfoText}>Az ONLINE meccshez nem kell mÃ¡st tennetek, csak ugyanazt a pÃ¡lyÃ¡t kivÃ¡lasztanotok mindketten Ã©s Start Game.</Text> : null} */}
 
             <View style={styles.modalBtns}>
               <Pressable style={[styles.modalBtn, styles.modalBtnGhost]} onPress={() => startGameFromSetup(false)}>
@@ -1773,7 +2086,7 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null) => 
                 ) : null}
               {!matchConfig.vsVirtual ? (
                 <Pressable onPress={swapHumanNames} hitSlop={10} style={styles.swapBtnBetween}>
-                  <Text style={styles.swapBtnText}>⇄</Text>
+                  <Text style={styles.swapBtnText}>â‡„</Text>
                 </Pressable>
               ) : null}
             </View>
@@ -1896,8 +2209,7 @@ function KeyFlex(props: { label: string; onPress: () => void; kind?: 'num' | 'ac
   return (
     <Pressable
       onTouchStart={(e) => {
-        // e.preventDefault(); // fontos!
-        e?.preventDefault?.();
+        e?.preventDefault(); // fontos!
         props.onPress();
       }}
       style={({ pressed }) => [
@@ -1999,6 +2311,86 @@ const styles = StyleSheet.create({
     gap: 8,
     marginTop: 8,
   },
+  qrPreviewLarge: {
+  width: 260,
+  height: 260,
+  alignSelf: 'center',
+  backgroundColor: '#fff',
+  padding: 14,
+  borderRadius: 16,
+  marginTop: 10,
+},
+
+orLabel: {
+  marginTop: 14,
+  textAlign: 'center',
+  fontWeight: '900',
+  color: 'rgba(0,0,0,0.48)',
+  letterSpacing: 1,
+},
+
+modalBtnsSingle: {
+  marginTop: 12,
+},
+
+scannerScreen: {
+  flex: 1,
+  backgroundColor: '#000',
+},
+
+scannerCamera: {
+  ...StyleSheet.absoluteFillObject,
+},
+
+scannerHud: {
+  flex: 1,
+  justifyContent: 'space-between',
+  paddingTop: 70,
+  paddingBottom: 34,
+  paddingHorizontal: 24,
+  backgroundColor: 'rgba(0,0,0,0.18)',
+},
+
+scannerTitle: {
+  textAlign: 'center',
+  color: '#fff',
+  fontSize: 24,
+  fontWeight: '900',
+},
+
+scannerHint: {
+  marginTop: 10,
+  textAlign: 'center',
+  color: 'rgba(255,255,255,0.88)',
+  fontSize: 15,
+  fontWeight: '700',
+},
+
+scannerFrame: {
+  alignSelf: 'center',
+  width: 250,
+  height: 250,
+  borderRadius: 24,
+  borderWidth: 3,
+  borderColor: '#3DFF2F',
+  backgroundColor: 'transparent',
+},
+
+scannerBottomActions: {
+  flexDirection: 'row',
+  gap: 10,
+},
+
+scannerBottomBtn: {
+  flex: 1,
+},
+
+scannerFallback: {
+  flex: 1,
+  justifyContent: 'center',
+  paddingHorizontal: 24,
+  backgroundColor: '#fff',
+},
   menuFieldWrap: {
     position: 'relative',
   },
@@ -2019,6 +2411,46 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     fontSize: 12,
   },
+  quickMenuOverlay: {
+  flex: 1,
+  backgroundColor: 'rgba(0,0,0,0.35)',
+  justifyContent: 'flex-end',
+  alignItems: 'flex-end',
+},
+
+  quickMenuCard: {
+    backgroundColor: '#3DFF2F',
+    borderRadius: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginRight: 16,
+    marginBottom: 88,
+    minWidth: 190,
+    shadowColor: '#000',
+    shadowOpacity: 0.28,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 8,
+  },
+
+  quickMenuItem: {
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+  },
+
+  quickMenuItemText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#0B2E00',
+  },
+
+  qrPreview: {
+    alignSelf: 'center',
+    backgroundColor: '#fff',
+    padding: 12,
+    borderRadius: 12,
+  },
   namesBlock: { position: 'relative', paddingRight: 52 },
   virtualToggleRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 18, marginBottom: 18 },
   switchLabel: { fontWeight: '900', color: 'rgba(0,0,0,0.72)' },
@@ -2037,7 +2469,6 @@ const styles = StyleSheet.create({
   modalBtnOk: { backgroundColor: '#2f6f18' },
   modalBtnTextGhost: { fontWeight: '900', color: 'rgba(0,0,0,0.75)' },
   modalBtnTextOk: { fontWeight: '900', color: '#ffffff' },
-  modalBtnsSingle: { marginTop: 0, alignItems: 'flex-end' },
   modalBtnArrow: { minWidth: 72, minHeight: 44, alignSelf: 'flex-end', flexGrow: 0, justifyContent: 'center' },
   modalBtnArrowImage: { width: 24, height: 24, resizeMode: 'contain', tintColor: '#ffffff' },
   onlineInlineWrap: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },

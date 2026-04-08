@@ -1,4 +1,4 @@
-import { onValue, ref, set } from 'firebase/database';
+import { onValue, ref } from 'firebase/database';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
@@ -15,11 +15,16 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { db } from '../../lib/firebase';
+import { addWatchedId, buildBoardShareUrl, buildQrImageUrl, getOrCreateDeviceId, parseBoardIdFromText, publishBoardRecord } from './broadcastShared';
 
 type Props = {
   onExit: () => void;
   clubId: string;
   initialBoardNr?: number | null;
+  onOpenScoring?: () => void;
+  onOpenDisplay?: () => void;
+  onOpenDisplayById?: (id: string) => void;
+  openNewGameRequestKey?: number;
 };
 
 type CricketVariant = 'own' | 'penalty';
@@ -157,7 +162,7 @@ function useDisplayWakeLock(enabled: boolean) {
   }, [enabled]);
 
   useEffect(() => {
-    if (typeof window === "undefined" || typeof document === "undefined") {
+    if (typeof document === 'undefined' || typeof window === 'undefined') {
       return;
     }
     if (!enabled) {
@@ -296,7 +301,6 @@ function CricketMarkBox(props: {
       ]}
     >
       <View style={styles.cricketMarkChipBg}>
-
         <View style={[styles.cricketMarkThirdBase, styles.cricketMarkThird1, styles.cricketMarkThirdBaseLight]} />
         <View style={[styles.cricketMarkThirdBase, styles.cricketMarkThird2, styles.cricketMarkThirdBaseMid]} />
         <View style={[styles.cricketMarkThirdBase, styles.cricketMarkThird3, styles.cricketMarkThirdBaseDark]} />
@@ -415,9 +419,9 @@ function chooseVirtualTarget(players: PlayerState[], idx: number, variant: Crick
       ? players.some((p, i) => i !== idx && self.points < p.points)
       : players.some((p, i) => i !== idx && self.points > p.points);
 
-  // Ha rosszabbul áll pontban, először keressen olyan szektort,
-  // amiből AZONNAL pontot tud szerezni:
-  // neki már ki van zárva, az ellenfél(ek) közül pedig valakinek még nincs.
+  // Ha rosszabbul Ã¡ll pontban, elÅ‘szÃ¶r keressen olyan szektort,
+  // amibÅ‘l AZONNAL pontot tud szerezni:
+  // neki mÃ¡r ki van zÃ¡rva, az ellenfÃ©l(ek) kÃ¶zÃ¼l pedig valakinek mÃ©g nincs.
   if (trailing) {
     for (const sector of SECTORS) {
       const selfClosed = self.marks[sector] >= 3;
@@ -428,10 +432,10 @@ function chooseVirtualTarget(players: PlayerState[], idx: number, variant: Crick
       }
     }
 
-    // Ha nincs azonnal pontszerző szektor, akkor 20 -> Bull sorrendben
-    // keresse az első olyan szektort, ami még nincs neki lezárva,
-    // és az ellenfél(ek) közül valakinek sincs lezárva.
-    // Ezt kezdi el gyűjteni, hogy később pontot szerezhessen rajta.
+    // Ha nincs azonnal pontszerzÅ‘ szektor, akkor 20 -> Bull sorrendben
+    // keresse az elsÅ‘ olyan szektort, ami mÃ©g nincs neki lezÃ¡rva,
+    // Ã©s az ellenfÃ©l(ek) kÃ¶zÃ¼l valakinek sincs lezÃ¡rva.
+    // Ezt kezdi el gyÅ±jteni, hogy kÃ©sÅ‘bb pontot szerezhessen rajta.
     for (const sector of SECTORS) {
       const selfClosed = self.marks[sector] >= 3;
       const someoneOpen = players.some((p, i) => i !== idx && p.marks[sector] < 3);
@@ -442,7 +446,7 @@ function chooseVirtualTarget(players: PlayerState[], idx: number, variant: Crick
     }
   }
 
-  // Ha nem áll rosszabbul pontban, akkor a normál zárási sorrend:
+  // Ha nem Ã¡ll rosszabbul pontban, akkor a normÃ¡l zÃ¡rÃ¡si sorrend:
   // 20 -> 19 -> ... -> 15 -> Bull
   for (const sector of SECTORS) {
     if (self.marks[sector] < 3) {
@@ -450,8 +454,8 @@ function chooseVirtualTarget(players: PlayerState[], idx: number, variant: Crick
     }
   }
 
-  // Ha már mindent lezárt, és még mindig rosszabbul áll,
-  // akkor próbáljon pontot szerezni a még nyitott ellenfél-szektorokon.
+  // Ha mÃ¡r mindent lezÃ¡rt, Ã©s mÃ©g mindig rosszabbul Ã¡ll,
+  // akkor prÃ³bÃ¡ljon pontot szerezni a mÃ©g nyitott ellenfÃ©l-szektorokon.
   if (trailing) {
     for (const sector of SECTORS) {
       const selfClosed = self.marks[sector] >= 3;
@@ -467,7 +471,7 @@ function chooseVirtualTarget(players: PlayerState[], idx: number, variant: Crick
 }
 
 function virtualHitMarks(level: number, sector: CricketSector): number {
-  // GyengÃ©bb szintek: a rÃ©gi 6 kÃ¶rÃ¼lbelÃ¼l az Ãºj 12 legyen
+  // GyengÃƒÂ©bb szintek: a rÃƒÂ©gi 6 kÃƒÂ¶rÃƒÂ¼lbelÃƒÂ¼l az ÃƒÂºj 12 legyen
   const t = Math.max(0.5, Math.min(6, level / 2));
   const r = Math.random();
 
@@ -536,7 +540,7 @@ function buildCricketValueString(players: PlayerState[], round: number, deviceIn
   ].join('_');
 }
 
-export default function KrikettScreen({ onExit, clubId, initialBoardNr }: Props) {
+export default function KrikettScreen({ onExit, clubId, initialBoardNr, onOpenScoring, onOpenDisplay, onOpenDisplayById, openNewGameRequestKey }: Props) {
   useDisplayWakeLock(true);
   const { width, height } = useWindowDimensions();
   const isPortrait = height >= width;
@@ -549,9 +553,19 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr }: Props)
   const [gameStarter, setGameStarter] = useState(0);
   const [variant, setVariant] = useState<CricketVariant>('own');
   const [boardNr, setBoardNr] = useState<number | null>(() => initialBoardNr ?? null);
+  const [boardId, setBoardId] = useState<string | null>(null);
+  const [showBroadcastDialog, setShowBroadcastDialog] = useState(false);
+  const [showScanDialog, setShowScanDialog] = useState(false);
+  const [scanInput, setScanInput] = useState('');
+  const [qrActivated, setQrActivated] = useState(false);
+  const [locationCoords, setLocationCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [locationGranted, setLocationGranted] = useState(false);
   const [showSetupDialog, setShowSetupDialog] = useState(false);
+  const [showQuickMenu, setShowQuickMenu] = useState(false);
   const [showBoardDialog, setShowBoardDialog] = useState(false);
   const [showLevelPicker, setShowLevelPicker] = useState(false);
+  const playersRef = useRef(players);
+  const handledOpenNewGameKeyRef = useRef<number | null>(null);
   const [showWinnerDialog, setShowWinnerDialog] = useState(false);
   const [winnerText, setWinnerText] = useState('');
   const [winnerRound, setWinnerRound] = useState<number | null>(null);
@@ -574,7 +588,7 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr }: Props)
 
   const undoStack = useRef<GameSnapshot[]>([]);
   const clientIdRef = useRef<string>(makeClientId());
-  const deviceInfoRef = useRef<string>(clientIdRef.current);
+  const deviceInfoRef = useRef<string>(getOrCreateDeviceId());
   const virtualTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastLocalSendRef = useRef<number>(0);
   const [boardDialogMode, setBoardDialogMode] = useState<'switch' | 'start'>('switch');
@@ -606,16 +620,25 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr }: Props)
   };
 
   const pushToFirebase = useCallback(async (nextPlayers: PlayerState[], nextRound: number, nextBoardNr: number | null) => {
-    if (nextBoardNr == null) return;
-    markLocalFirebaseSend();
+    if (!boardId) return;
+    if (!locationGranted && !qrActivated) return;
     try {
-      await set(ref(db, `cricket/${clubId}/${nextBoardNr}`), buildCricketValueString(nextPlayers, nextRound, deviceInfoRef.current));
+      await publishBoardRecord({
+        boardId,
+        kind: 'cricket',
+        stats: buildCricketValueString(nextPlayers, nextRound, deviceInfoRef.current),
+        deviceId: deviceInfoRef.current,
+        lat: locationGranted ? locationCoords?.lat ?? null : null,
+        lng: locationGranted ? locationCoords?.lng ?? null : null,
+      });
     } catch {}
-  }, [clubId]);
-
+  }, [boardId, locationGranted, qrActivated, locationCoords]);
+  useEffect(() => {
+    playersRef.current = players;
+  }, [players]);
   useEffect(() => {
     void pushToFirebase(players, round, boardNr);
-  }, [players, round, boardNr, pushToFirebase]);
+  }, [players, round, boardId, locationGranted, qrActivated, locationCoords, pushToFirebase]);
 
   useEffect(() => {
     if (boardNr == null) {
@@ -848,11 +871,11 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr }: Props)
   let prev = undoStack.current.pop();
   if (!prev) return;
 
-  // Virtual meccsnél, ha most épp újra a human következne,
-  // akkor az utolsó snapshot gyakran csak a virtual előtti állapot:
-  // vagyis a human már ledobta a saját körét, a virtual még nem.
-  // Ilyenkor még egyet vissza kell lépni, hogy a human dobása is
-  // visszavonódjon, és ismét a human következzen üres bevitellel.
+  // Virtual meccsnÃ©l, ha most Ã©pp Ãºjra a human kÃ¶vetkezne,
+  // akkor az utolsÃ³ snapshot gyakran csak a virtual elÅ‘tti Ã¡llapot:
+  // vagyis a human mÃ¡r ledobta a sajÃ¡t kÃ¶rÃ©t, a virtual mÃ©g nem.
+  // Ilyenkor mÃ©g egyet vissza kell lÃ©pni, hogy a human dobÃ¡sa is
+  // visszavonÃ³djon, Ã©s ismÃ©t a human kÃ¶vetkezzen Ã¼res bevitellel.
   const isVirtualMatch = prev.players.some((p) => p.isVirtual);
 
   if (
@@ -882,7 +905,7 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr }: Props)
   setWinnerRound(null);
   setPendingWinnerIdx(null);
 
-  // Undo után rögtön menjen fel a visszaállított állapot Firebase-be is.
+  // Undo utÃ¡n rÃ¶gtÃ¶n menjen fel a visszaÃ¡llÃ­tott Ã¡llapot Firebase-be is.
   void pushToFirebase(restoredPlayers, prev.round, prev.boardNr);
 };
 
@@ -893,14 +916,14 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr }: Props)
     setNameTouched((prev) => [...prev, false].slice(0, 4));
   };
 
-  const openSetup = () => {
-    ensureKrikettFullscreen();
+
+  const buildDraftFromCurrent = (): SetupDraft => {
     const persisted = loadVirtualPrefs();
     const currentHasVirtual = players.some((p) => p.isVirtual);
     const nextVsVirtual = currentHasVirtual || persisted.enabled;
     const currentHumanPlayers = players.filter((p) => !p.isVirtual).map((p) => p.name);
 
-    setDraft({
+    return {
       humanNames: nextVsVirtual
         ? [currentHumanPlayers[0] || 'PL.1']
         : (currentHumanPlayers.length > 0 ? currentHumanPlayers : ['PL.1', 'PL.2']),
@@ -908,7 +931,29 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr }: Props)
       virtualLevel: players.find((p) => p.isVirtual)?.name?.startsWith('Lv.')
         ? Number((players.find((p) => p.isVirtual)?.name || 'Lv.5').replace('Lv.', '')) || persisted.level
         : persisted.level,
-    });
+    };
+  };
+
+  const replayCurrentMatch = () => {
+    const replayDraft = buildDraftFromCurrent();
+    setDraft(replayDraft);
+    setShowQuickMenu(false);
+    setShowSetupDialog(false);
+    setShowBoardDialog(false);
+    startGame(variant, boardNr != null, boardNr, replayDraft);
+  };
+
+  useEffect(() => {
+    if (openNewGameRequestKey == null) return;
+    if (handledOpenNewGameKeyRef.current === openNewGameRequestKey) return;
+    handledOpenNewGameKeyRef.current = openNewGameRequestKey;
+    openSetup();
+  }, [openNewGameRequestKey]);
+
+  const openSetup = () => {
+    ensureKrikettFullscreen();
+    setShowQuickMenu(false);
+    setDraft(buildDraftFromCurrent());
     setWarnedBusyBoard(null);
     setMenuBoardTmp(boardNr);
     setShowSetupDialog(true);
@@ -924,14 +969,15 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr }: Props)
     }));
   };
 
-  const startGame = (selectedVariant: CricketVariant, withBoard: boolean, forcedBoard?: number | null) => {
-    const rawNames = draft.vsVirtual
-      ? [draft.humanNames[0] || 'PL.1']
-      : draft.humanNames;
+  const startGame = (selectedVariant: CricketVariant, withBoard: boolean, forcedBoard?: number | null, draftOverride?: SetupDraft) => {
+    const sourceDraft = draftOverride ?? draft;
+    const rawNames = sourceDraft.vsVirtual
+      ? [sourceDraft.humanNames[0] || 'PL.1']
+      : sourceDraft.humanNames;
 
     const trimmedNames = rawNames.map((n) => (n || '').trim());
 
-    const names = draft.vsVirtual
+    const names = sourceDraft.vsVirtual
       ? [trimmedNames[0] || 'PL.1']
       : trimmedNames
           .map((name, idx) => ({ name, idx }))
@@ -939,13 +985,13 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr }: Props)
           .map((item, idx) => item.name || `PL.${idx + 1}`)
           .slice(0, 4);
 
-    const finalNames = draft.vsVirtual ? names : normalizePlayerNames(names);
+    const finalNames = sourceDraft.vsVirtual ? names : normalizePlayerNames(names);
 
-    const nextPlayers = draft.vsVirtual
-      ? [freshPlayer(finalNames[0]), freshPlayer(`Lv.${draft.virtualLevel}`, true)]
+    const nextPlayers = sourceDraft.vsVirtual
+      ? [freshPlayer(finalNames[0]), freshPlayer(`Lv.${sourceDraft.virtualLevel}`, true)]
       : finalNames.map((name) => freshPlayer(name));
 
-    saveVirtualPrefs({ enabled: draft.vsVirtual, level: draft.virtualLevel });
+    saveVirtualPrefs({ enabled: sourceDraft.vsVirtual, level: sourceDraft.virtualLevel });
     saveNameHistoryFrom(finalNames);
     undoStack.current = [];
     setPlayers(nextPlayers);
@@ -993,7 +1039,7 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr }: Props)
 
   const renderBroadcastIcon = () => {
     const src = require('./broadcast.png');
-    const isActive = boardNr != null;
+    const isActive = !!boardId && (locationGranted || qrActivated);
     return (
       <View style={styles.broadcastOuter} pointerEvents="none">
         <View style={[styles.broadcastCircle, isActive ? styles.broadcastCircleOn : styles.broadcastCircleOff]}>
@@ -1001,7 +1047,7 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr }: Props)
         </View>
         {isActive ? (
           <View style={styles.broadcastBadge}>
-            <Text style={styles.broadcastBadgeText}>{boardNr}</Text>
+            <Text style={styles.broadcastBadgeText}>QR</Text>
           </View>
         ) : null}
       </View>
@@ -1013,7 +1059,7 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr }: Props)
       <View style={styles.screen}>
         <View style={styles.topSpacer} />
 
-        <Pressable style={styles.floatingBoardBadgeBtn} onPress={() => { setBoardDialogMode('switch'); setShowBoardDialog(true); }}>
+        <Pressable style={styles.floatingBoardBadgeBtn} onPress={() => { if (boardId) { setQrActivated(true); setShowBroadcastDialog(true); void pushToFirebase(playersRef.current, round, null); } }}>
           {renderBroadcastIcon()}
         </Pressable>
 
@@ -1031,57 +1077,38 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr }: Props)
         </Animated.View>
 
         <View style={styles.tableWrap}>
-        {isPortrait ? (
-          <View style={styles.tablePortraitHeaderRow}>
-            <View style={[styles.cellBase, styles.playerCell]} />
-            <View style={[styles.cellBase, styles.pointsCell]} />
-            {SECTORS.map((sector) => (
-              <View key={`hdr-${String(sector)}`} style={[styles.cellBase, styles.markCell, styles.markCellBoxWrap]}>
-                <Text style={styles.tablePortraitHeaderText}>
-                  {sector === 'B' ? 'Bull' : String(sector)}
-                </Text>
-              </View>
-            ))}
-          </View>
-        ) : null}
-
-        {players.map((player, idx) => (
-          <View key={player.id} style={[styles.tableRow, idx === active ? styles.tableRowActive : null]}>
-            <View style={[styles.cellBase, styles.playerCell, styles.playerCellRow]}>
-              <View style={styles.playerNameWrapper}>
+          {players.map((player, idx) => (
+            <View key={player.id} style={[styles.tableRow, idx === active ? styles.tableRowActive : null]}>
+              <View style={[styles.cellBase, styles.playerCell, styles.playerCellRow]}>
               <Text
-                style={[
-                  styles.playerNameText,
-                  idx === active ? styles.playerNameActive : null,
-                ]}
-                numberOfLines={2}
+                style={[styles.playerNameText, idx === active ? styles.playerNameActive : null]}
+                numberOfLines={1}
               >
                 {player.name}
               </Text>
-            </View>
 
               <Text style={styles.playerWinsText} numberOfLines={1}>
                 {player.wins}
               </Text>
             </View>
-            <View style={[styles.cellBase, styles.pointsCell]}>
-              <Text style={styles.pointsText}>{player.points}</Text>
-            </View>
-
-            {SECTORS.map((sector) => (
-              <View key={`${player.id}-${String(sector)}`} style={[styles.cellBase, styles.markCell, styles.markCellBoxWrap]}>
-                <CricketMarkBox
-                  label={sector === 'B' ? 'B.' : String(sector)}
-                  marks={player.marks[sector]}
-                  compact
-                  hideLabel={isPortrait}
-                  short={isPortrait}
-                />
+              <View style={[styles.cellBase, styles.pointsCell]}>
+                <Text style={styles.pointsText}>{player.points}</Text>
               </View>
-            ))}
-          </View>
-        ))}
-      </View>
+
+              {SECTORS.map((sector) => (
+                <View key={`${player.id}-${String(sector)}`} style={[styles.cellBase, styles.markCell, styles.markCellBoxWrap]}>
+                  <CricketMarkBox
+                    label={sector === 'B' ? 'B.' : String(sector)}
+                    marks={player.marks[sector]}
+                    compact
+                    hideLabel={isPortrait}
+                    short={isPortrait}
+                  />
+                </View>
+              ))}
+            </View>
+          ))}
+        </View>
 
         <View style={styles.inputArea}>
           {isPortrait ? (
@@ -1105,7 +1132,7 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr }: Props)
                     <Pressable
                       key={`sector-${String(btn)}`}
                       hitSlop={keyHitSlop}
-                      onTouchStart={(e: any) => {
+                                            onTouchStart={(e: any) => {
                         e?.preventDefault?.();
                         onSectorTap(btn);
                       }}
@@ -1121,7 +1148,7 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr }: Props)
                     <Pressable
                       key={`quick-${btn}`}
                       hitSlop={keyHitSlop}
-                      onTouchStart={(e: any) => {
+                                          onTouchStart={(e: any) => {
                         e?.preventDefault?.();
                         onQuickTap(btn);
                       }}
@@ -1135,7 +1162,7 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr }: Props)
                 <View style={styles.portraitColumn}>
                   <Pressable
                     hitSlop={keyHitSlop}
-                    onTouchStart={(e: any) => {
+                                      onTouchStart={(e: any) => {
                         e?.preventDefault?.();
                         onEnter();
                       }}
@@ -1148,9 +1175,9 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr }: Props)
                   
                     <Pressable
                     hitSlop={keyHitSlop}
-                    onTouchStart={(e: any) => {
+                                      onTouchStart={(e: any) => {
                         e?.preventDefault?.();
-                        onClear();  
+                        onClear();
                       }}
                     style={({ pressed }) => [styles.keyBtn, styles.keyBtnAction, styles.portraitClearBtn, pressed ? styles.keyBtnPressed : null]}
                   >
@@ -1159,7 +1186,6 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr }: Props)
                   <Pressable
                       hitSlop={keyHitSlop}
                       onPress={onUndo}
-                    
                       style={({ pressed }) => [styles.keyBtn, styles.keyBtnAction, styles.portraitUndoBtn, pressed ? styles.keyBtnPressed : null]}
                     >
                   
@@ -1175,7 +1201,7 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr }: Props)
                   <Pressable
                       key={`sector-${String(btn)}`}
                       hitSlop={keyHitSlop}
-                      onTouchStart={(e: any) => {
+                                            onTouchStart={(e: any) => {
                         e?.preventDefault?.();
                         onSectorTap(btn);
                       }}
@@ -1191,7 +1217,7 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr }: Props)
                   <Pressable
                     key={`quick-${btn}`}
                     hitSlop={keyHitSlop}
-                    onTouchStart={(e: any) => {
+                                        onTouchStart={(e: any) => {
                         e?.preventDefault?.();
                         onQuickTap(btn);
                       }}
@@ -1218,7 +1244,7 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr }: Props)
 
                 <Pressable
                   hitSlop={keyHitSlop}
-                  onTouchStart={(e: any) => {
+                                    onTouchStart={(e: any) => {
                         e?.preventDefault?.();
                         onEnter();
                       }}
@@ -1229,7 +1255,7 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr }: Props)
 
                   <Pressable
                     hitSlop={keyHitSlop}
-                    onTouchStart={(e: any) => {
+                                      onTouchStart={(e: any) => {
                         e?.preventDefault?.();
                         onClear();
                       }}
@@ -1250,10 +1276,30 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr }: Props)
           )}
         </View>
 
-        <Pressable style={styles.cornerMenu} onPress={openSetup}>
-          <Text style={styles.cornerText}>☰</Text>
+        <Pressable style={styles.cornerMenu} onPress={() => setShowQuickMenu((v) => !v)}>
+          <Text style={styles.cornerText}>â˜°</Text>
         </Pressable>
       </View>
+
+
+      <Modal visible={showQuickMenu} transparent animationType="fade" onRequestClose={() => setShowQuickMenu(false)}>
+        <Pressable style={styles.quickMenuOverlay} onPress={() => setShowQuickMenu(false)}>
+          <View style={styles.quickMenuCard}>
+            <Pressable style={styles.quickMenuItem} onPress={() => { setShowQuickMenu(false); onOpenScoring?.(); }}>
+              <Text style={styles.quickMenuItemText}>new 501</Text>
+            </Pressable>
+            <Pressable style={styles.quickMenuItem} onPress={() => { setShowQuickMenu(false); openSetup(); }}>
+              <Text style={styles.quickMenuItemText}>new Cricket</Text>
+            </Pressable>
+            <Pressable style={styles.quickMenuItem} onPress={() => { setShowQuickMenu(false); onOpenDisplay?.(); }}>
+              <Text style={styles.quickMenuItemText}>Big Display</Text>
+            </Pressable>
+            <Pressable style={styles.quickMenuItem} onPress={replayCurrentMatch}>
+              <Text style={styles.quickMenuItemText}>re-play</Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Modal>
 
       <Modal visible={showSetupDialog} transparent animationType="fade" onRequestClose={() => setShowSetupDialog(false)}>
         <View style={styles.modalOverlay}>
@@ -1344,7 +1390,7 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr }: Props)
         </Pressable>
       </Modal>
 
-      <Modal visible={showBoardDialog} transparent animationType="fade" onRequestClose={() => setShowBoardDialog(false)}>
+      <Modal visible={false && showBoardDialog} transparent animationType="fade" onRequestClose={() => setShowBoardDialog(false)}>
         <Pressable style={styles.modalOverlay} onPress={() => setShowBoardDialog(false)}>
           <Pressable style={styles.modalCard} onPress={() => {}}>
             {!!clubId?.trim() ? (
@@ -1391,6 +1437,30 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr }: Props)
         </Pressable>
       </Modal>
 
+      <Modal visible={showBroadcastDialog} transparent animationType="fade" onRequestClose={() => setShowBroadcastDialog(false)}>
+        <View style={styles.modalOverlay}><View style={styles.modalCard}>
+          <Text style={styles.modalTitle}>Broadcast</Text>
+          <Text style={styles.modalLabel}>{locationGranted ? 'Nearby devices can see this cricket match.' : 'Location not available. QR/direct access only.'}</Text>
+          {boardId ? <Image source={{ uri: buildQrImageUrl(buildBoardShareUrl(boardId)) }} style={styles.qrPreview} /> : null}
+          <Text selectable style={styles.modalHintSmall}>{boardId ? buildBoardShareUrl(boardId) : 'Generating...'}</Text>
+          <View style={styles.modalBtns}>
+            <Pressable style={[styles.modalBtn, styles.modalBtnGhost]} onPress={() => setShowBroadcastDialog(false)}><Text style={styles.modalBtnTextGhost}>Close</Text></Pressable>
+            <Pressable style={[styles.modalBtn, styles.modalBtnOk]} onPress={() => { setShowBroadcastDialog(false); setShowScanDialog(true); }}><Text style={styles.modalBtnTextOk}>Scan</Text></Pressable>
+          </View>
+        </View></View>
+      </Modal>
+
+      <Modal visible={showScanDialog} transparent animationType="fade" onRequestClose={() => setShowScanDialog(false)}>
+        <View style={styles.modalOverlay}><View style={styles.modalCard}>
+          <Text style={styles.modalTitle}>Open board display</Text>
+          <TextInput value={scanInput} onChangeText={setScanInput} style={styles.modalInput} placeholder="Paste QR url or board id" placeholderTextColor="rgba(0,0,0,0.45)" />
+          <View style={styles.modalBtns}>
+            <Pressable style={[styles.modalBtn, styles.modalBtnGhost]} onPress={() => setShowScanDialog(false)}><Text style={styles.modalBtnTextGhost}>Cancel</Text></Pressable>
+            <Pressable style={[styles.modalBtn, styles.modalBtnOk]} onPress={() => { const parsed = parseBoardIdFromText(scanInput); if (parsed) { addWatchedId(parsed); setShowScanDialog(false); setScanInput(''); onOpenDisplayById?.(parsed); } }}><Text style={styles.modalBtnTextOk}>Open</Text></Pressable>
+          </View>
+        </View></View>
+      </Modal>
+
       <Modal visible={showWinnerDialog} transparent animationType="fade" onRequestClose={() => setShowWinnerDialog(false)}>
         <View style={styles.modalOverlay}><View style={styles.modalCard}>
           <Text style={styles.modalTitle}>Winner</Text>
@@ -1425,83 +1495,71 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr }: Props)
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#ffffff' },
-  screen: { flex: 1, backgroundColor: '#ffffff', padding: 2 },
-  topSpacer: { height: 0 },
-
+  screen: { flex: 1, backgroundColor: '#ffffff', padding: 8 },
+  topSpacer: { height: 10 },
 
   floatingBoardBadgeBtn: {
   position: 'absolute',
-  left: 3,
-  top: 1,
+  right: 8,
+  top: 8,
   zIndex: 2000,
   elevation: 8,
 },
 
-  broadcastOuter: {
-    width: 28,
-    height: 28,
-    position: 'relative',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+broadcastOuter: {
+  width: 56,
+  height: 56,
+  position: 'relative',
+  alignItems: 'center',
+  justifyContent: 'center',
+},
 
-  broadcastCircle: {
-    width: 28,
-    height: 28,
-    borderRadius: 999,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#d3d3d3',
-    backgroundColor: '#ffffff',
-  },
+broadcastCircle: {
+  width: 56,
+  height: 56,
+  borderRadius: 999,
+  alignItems: 'center',
+  justifyContent: 'center',
+  borderWidth: 2,
+  borderColor: '#d3d3d3',
+  backgroundColor: '#ffffff',
+},
 
-  broadcastCircleOff: {
-    backgroundColor: '#e3e3e3',
-  },
+broadcastCircleOff: {
+  backgroundColor: '#e3e3e3',
+},
 
-  broadcastCircleOn: {
-    backgroundColor: '#d7ebcf',
-  },
+broadcastCircleOn: {
+  backgroundColor: '#d7ebcf',
+},
 
-  broadcastIconInside: {
-    width: 13,
-    height: 13,
-    resizeMode: 'contain',
-    tintColor: 'rgba(0,0,0,0.70)',
-  },
+broadcastIconInside: {
+  width: 26,
+  height: 26,
+  resizeMode: 'contain',
+  tintColor: 'rgba(0,0,0,0.70)',
+},
 
-  broadcastBadge: {
-    position: 'absolute',
-    right: -4,
-    bottom: -4,
-    width: 14,
-    height: 14,
-    borderRadius: 999,
-    backgroundColor: '#2f6f18',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#ffffff',
-    zIndex: 20,
-    elevation: 20,
-  },
-
-  broadcastBadgeText: {
-    color: '#ffffff',
-    fontSize: 7,
-    fontWeight: '800',
-  },
-
-  tableWrap: {
-    marginTop: 2,
-    borderRadius: 12,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.10)',
-    backgroundColor: '#2f2e2d',
-  },
-
+broadcastBadge: {
+  position: 'absolute',
+  right: -6,
+  bottom: -6,
+  width: 24,
+  height: 24,
+  borderRadius: 999,
+  backgroundColor: '#2f6f18',
+  alignItems: 'center',
+  justifyContent: 'center',
+  borderWidth: 2,
+  borderColor: '#ffffff',
+  zIndex: 20,
+  elevation: 20,
+},
+broadcastBadgeText: {
+  color: '#ffffff',
+  fontSize: 12,
+  fontWeight: '800',
+},
   roundFlashWrap: {
     position: 'absolute',
     left: 0,
@@ -1523,21 +1581,14 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     overflow: 'hidden',
   },
-  tablePortraitHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-     backgroundColor: '#5e5c5a',
-      borderBottomWidth: 1,
-      borderBottomColor: '#777777',
-  },
-
-  tablePortraitHeaderText: {
-    color: 'rgba(255,255,255,0.92)',
-    fontSize: 18,
-    paddingVertical: 4,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
+  tableWrap: {
+  marginTop: 8,
+  borderRadius: 12,
+  overflow: 'hidden',
+  borderWidth: 1,
+  borderColor: 'rgba(255,255,255,0.10)',
+  backgroundColor: '#2f2e2d',
+},
 
 tableHeaderRow: {
   display: 'none',
@@ -1560,6 +1611,60 @@ tableRowActive: {
   // borderBottomColor: '#b38f00',
 },
 
+cricketMarkChipShort: {
+  paddingVertical: 10,
+  paddingHorizontal: 12,
+  minWidth: 34,
+  minHeight: 14,
+},
+
+
+cricketMarkThirdBase: {
+  position: 'absolute',
+  top: 0,
+  bottom: 0,
+},
+
+cricketMarkThird1: {
+  left: '0%',
+  width: '33.3333%',
+},
+
+cricketMarkThird2: {
+  left: '33.3333%',
+  width: '33.3333%',
+},
+
+cricketMarkThird3: {
+  left: '66.6666%',
+  width: '33.3333%',
+},
+
+cricketMarkThirdFill: {
+  position: 'absolute',
+  top: 0,
+  bottom: 0,
+  backgroundColor: 'rgba(61,255,47,0.42)',
+},
+
+cricketMarkThirdFillMid: {
+  position: 'absolute',
+  top: 0,
+  bottom: 0,
+  backgroundColor: 'rgba(61,255,47,0.32)',
+},
+
+cricketMarkThirdBaseLight: {
+  backgroundColor: 'rgba(255,255,255,0.11)',
+},
+
+cricketMarkThirdBaseMid: {
+  backgroundColor: 'rgba(255,255,255,0.05)',
+},
+
+cricketMarkThirdBaseDark: {
+  backgroundColor: 'rgba(255,255,255,0.11)',
+},
 cellBase: {
   
   justifyContent: 'center',
@@ -1571,34 +1676,21 @@ playerCell: {
   
   flex: 1.1,
 },
+
 playerCellRow: {
   flexDirection: 'row',
   alignItems: 'center',
   justifyContent: 'space-between',
   width: '100%',
-  minWidth: 0,
-},
-
-playerNameClip: {
-  flex: 1,
-  minWidth: 0,
-  overflow: 'hidden',
-  justifyContent: 'center',
-},
-
-
-playerNameWrapper: {
-  flex: 1,
-  height: 30,
-  overflow: 'hidden',
-  justifyContent: 'flex-start',
 },
 
 playerNameText: {
   fontSize: 16,
   fontWeight: '800',
   color: '#e6e5e5',
-  lineHeight: 30,       // 🔴 nagy sorköz → 2. sor lecsúszik
+  textAlign: 'left',
+  flex: 1,
+  flexShrink: 1,
 },
 
 playerWinsText: {
@@ -1609,7 +1701,6 @@ playerWinsText: {
   textAlign: 'right',
   flexShrink: 0,
 },
-
 
 pointsCell: {
   
@@ -1641,10 +1732,11 @@ pointsText: {
 markText: {
   display: 'none',
 },
+
 cricketMarkChip: {
   borderRadius: 8,
   borderWidth: 1,
-  borderColor: 'rgba(255, 255, 255, 0.38)',
+  borderColor: 'rgba(255,255,255,0.16)',
   backgroundColor: 'rgba(68, 65, 65, 0.97)',
   overflow: 'hidden',
   justifyContent: 'center',
@@ -1655,7 +1747,6 @@ cricketMarkChip: {
   paddingHorizontal: 8,
   minWidth: 55,
 },
-
 cricketMarkChipCompact: {
   paddingVertical: 8,
   paddingHorizontal: 24,
@@ -1663,110 +1754,19 @@ cricketMarkChipCompact: {
   borderRadius: 6,
 },
 
-cricketMarkChipShort: {
-  paddingVertical: 10,
-  paddingHorizontal: 12,
-  minWidth: 34,
-  minHeight: 14,
-},
-
 cricketMarkChipBg: {
   ...StyleSheet.absoluteFillObject,
   position: 'absolute',
 },
 
-cricketMarkThirdBase: {
-  position: 'absolute',
-  top: 0,
-  bottom: 0,
-},
 
-cricketMarkThird1: {
-  left: '0%',
-  width: '33.3333%',
-},
-
-cricketMarkThird2: {
-  left: '33.3333%',
-  width: '33.3333%',
-},
-
-cricketMarkThird3: {
-  left: '66.6666%',
-  width: '33.3333%',
-},
-
-cricketMarkThirdFill: {
-  position: 'absolute',
-  top: 0,
-  bottom: 0,
-  backgroundColor: 'rgba(61,255,47,0.42)',
-},
-cricketMarkThirdFillMid: {
-  position: 'absolute',
-  top: 0,
-  bottom: 0,
-  backgroundColor: 'rgba(61,255,47,0.32)',
-},
-
-cricketMarkThirdBaseLight: {
-  backgroundColor: 'rgba(255,255,255,0.11)',
-},
-
-cricketMarkThirdBaseMid: {
-  backgroundColor: 'rgba(255,255,255,0.05)',
-},
-
-cricketMarkThirdBaseDark: {
-  backgroundColor: 'rgba(255,255,255,0.11)',
-},
-
-// cricketMarkThirdBaseLight: {
-//   backgroundColor: 'rgba(255,255,255,0.05)',
-// },
-
-// cricketMarkThirdBaseMid: {
-//   backgroundColor: 'rgba(255,255,255,0.08)',
-// },
-
-// cricketMarkThirdBaseDark: {
-//   backgroundColor: 'rgba(255,255,255,0.11)',
-// },
 cricketMarkChipLabel: {
   color: 'rgba(255,255,255,0.92)',
   fontSize: 18,
   fontWeight: '700',
   textAlign: 'center',
   zIndex: 2,
-},
-
-
-cricketMarkChipFill: {
-  position: 'absolute',
-  left: 0,
-  top: 0,
-  bottom: 0,
-  backgroundColor: 'rgba(61,255,47,0.42)',
-},
-
-cricketMarkDivider: {
-  position: 'absolute',
-  top: 0,
-  bottom: 0,
-  width: 2,
-  backgroundColor: 'rgba(210,210,210,0.32)',
-},
-
-cricketMarkDivider1: {
-  left: '33.3333%',
-  marginLeft: -1,
-},
-
-cricketMarkDivider2: {
-  left: '66.6666%',
-  marginLeft: -1,
-},
-
+},  
   headerCell: { minHeight: 64 },
   headerText: { color: 'rgba(0,0,0,0.62)', fontWeight: '900', fontSize: 24 },
   
@@ -1776,17 +1776,17 @@ cricketMarkDivider2: {
   turnInputLandscape: {
     flex: 1,
   },
-  buttonArea: { flex: 1, justifyContent: 'space-between', gap: 3 },
-  buttonRow: { flex: 1, flexDirection: 'row', gap: 10 },
+  buttonArea: { flex: 1, justifyContent: 'space-between', gap: 8 },
+  buttonRow: { flex: 1, flexDirection: 'row', gap: 8 },
 
-  portraitColumnsWrap: { flex: 1, flexDirection: 'row', gap: 2 },
-  portraitColumn: { flex: 1, gap: 10 },
+  portraitColumnsWrap: { flex: 1, flexDirection: 'row', gap: 8 },
+  portraitColumn: { flex: 1, gap: 8 },
   portraitColumnBtn: { flex: 1 },
   portraitEnterBtn: { flex: 3 },
   portraitClearBtn: { flex: 2 },
   portraitUndoBtn: { flex: 2 },
 
-  landscapeActionRow: { flex: 1, flexDirection: 'row', gap: 3 },
+  landscapeActionRow: { flex: 1, flexDirection: 'row', gap: 8 },
   landscapeInputWrap: {
     flex: 2,
     alignSelf: 'stretch',
@@ -1796,14 +1796,45 @@ cricketMarkDivider2: {
   landscapeUndoBtn: { flex: 2 },
 
   keyBtn: { flex: 1, borderRadius: 10, backgroundColor: '#f3d49b', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(0,0,0,0.12)' },
-  keyBtnQuick: { backgroundColor: '#926f179f' },
+  keyBtnQuick: { backgroundColor: '#d9c07f' },
   keyBtnAction: { backgroundColor: '#7a5b22' },
   keyBtnEnter: { backgroundColor: '#2f6f18' },
   keyBtnPressed: { opacity: 0.8 },
   keyBtnText: { color: '#b3422a', fontWeight: '900', fontSize: 22 },
   keyBtnTextAction: { color: 'rgba(255,255,255,0.94)', fontSize: 18 },
 
-  cornerMenu: { position: 'absolute', right: 1, bottom: 1, width: 60, height: 60, borderRadius: 999, backgroundColor: '#2f6f18', alignItems: 'center', justifyContent: 'center', zIndex: 999, elevation: 5 },
+  quickMenuOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'flex-end',
+    alignItems: 'flex-end',
+    paddingRight: 12,
+    paddingBottom: 82,
+  },
+  quickMenuCard: {
+    minWidth: 168,
+    backgroundColor: '#2f6f18',
+    borderRadius: 14,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.18)',
+  },
+  quickMenuItem: {
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  quickMenuItemText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  qrPreview: {
+    alignSelf: 'center',
+    backgroundColor: '#fff',
+    padding: 12,
+    borderRadius: 12,
+  },
+  cornerMenu: { position: 'absolute', right: 6, bottom: 6, width: 64, height: 64, borderRadius: 999, backgroundColor: '#2f6f18', alignItems: 'center', justifyContent: 'center', zIndex: 999, elevation: 5 },
   cornerText: { color: '#ffffff', fontWeight: '900', fontSize: 22 },
 
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', alignItems: 'center', justifyContent: 'center' },

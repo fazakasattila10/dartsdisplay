@@ -1,23 +1,19 @@
-import { get, onValue, push, ref } from "firebase/database";
+import { onValue, ref } from "firebase/database";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DimensionValue, StyleProp, ViewStyle } from "react-native";
 import {
-  Animated,
-  Easing,
-  Image,
-  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
-  useWindowDimensions,
+  useWindowDimensions
 } from "react-native";
 import { db } from "../../lib/firebase";
 import HistoryScreen from "./HistoryScreen";
 import KrikettScreen from "./KrikettScreen";
 import ScoringScreen2 from "./ScoringScreen2";
+import { addWatchedId, getDistanceMeters, getOrCreateDeviceId, getSavedWatchedIds, parseBoardIdFromText, requestBrowserLikeLocation, saveWatchedIds } from "./broadcastShared";
 
 type BoardData = {
   raw: string;
@@ -129,7 +125,15 @@ function marksToSlashesDisplay(v: string) {
   const n = Math.max(0, Math.min(3, Number(v) || 0));
   return "/".repeat(n);
 }
-
+function getWindowSearch(): string {
+  try {
+    if (typeof window === 'undefined') return '';
+    const search = (window as any)?.location?.search;
+    return typeof search === 'string' ? search : '';
+  } catch {
+    return '';
+  }
+}
 function ensureDocFullscreen() {
   if (typeof document === "undefined") return Promise.resolve();
   if (document.fullscreenElement) return Promise.resolve();
@@ -222,39 +226,38 @@ function useDisplayWakeLock(enabled: boolean) {
   }, [enabled]);
 
   useEffect(() => {
-  if (typeof window === "undefined" || typeof document === "undefined") {
-    return;
-  }
+    if (typeof document === 'undefined' || typeof window === 'undefined') {
+      return;
+    }
+    if (!enabled) {
+      void releaseWakeLock();
+      return;
+    }
 
-  if (!enabled) {
-    void releaseWakeLock();
-    return;
-  }
-
-  void requestWakeLock();
-
-  const retry = () => {
-    if (!enabled) return;
     void requestWakeLock();
-  };
 
-  document.addEventListener("visibilitychange", retry);
-  window.addEventListener("focus", retry);
-  window.addEventListener("pageshow", retry);
-  window.addEventListener("pointerdown", retry, { passive: true });
-  window.addEventListener("touchstart", retry, { passive: true });
-  window.addEventListener("keydown", retry);
+    const retry = () => {
+      if (!enabled) return;
+      void requestWakeLock();
+    };
 
-  return () => {
-    document.removeEventListener("visibilitychange", retry);
-    window.removeEventListener("focus", retry);
-    window.removeEventListener("pageshow", retry);
-    window.removeEventListener("pointerdown", retry);
-    window.removeEventListener("touchstart", retry);
-    window.removeEventListener("keydown", retry);
-    void releaseWakeLock();
-  };
-}, [enabled, releaseWakeLock, requestWakeLock]);
+    document.addEventListener("visibilitychange", retry);
+    window.addEventListener("focus", retry);
+    window.addEventListener("pageshow", retry);
+    window.addEventListener("pointerdown", retry, { passive: true });
+    window.addEventListener("touchstart", retry, { passive: true });
+    window.addEventListener("keydown", retry);
+
+    return () => {
+      document.removeEventListener("visibilitychange", retry);
+      window.removeEventListener("focus", retry);
+      window.removeEventListener("pageshow", retry);
+      window.removeEventListener("pointerdown", retry);
+      window.removeEventListener("touchstart", retry);
+      window.removeEventListener("keydown", retry);
+      void releaseWakeLock();
+    };
+  }, [enabled, releaseWakeLock, requestWakeLock]);
 
   return state;
 }
@@ -405,14 +408,14 @@ function BoardCard(props: {
           >
             <View style={[styles.boardBadge, badgeBgStyle, badgeGlowStyle]}>
               <Text style={[styles.boardBadgeText, badgeTextStyle, { fontSize: scaleFont(13, z) }]}> 
-                {props.boardNr}
+                {props.boardNr > 0 ? props.boardNr : ''}
               </Text>
             </View>
           </Pressable>
         ) : (
           <View style={[styles.boardBadge, badgeBgStyle, badgeGlowStyle]}>
             <Text style={[styles.boardBadgeText, badgeTextStyle, { fontSize: scaleFont(13, z) }]}> 
-              {props.boardNr}
+              {props.boardNr > 0 ? props.boardNr : ''}
             </Text>
           </View>
         )}
@@ -557,834 +560,182 @@ function StatRow(props: { left: string; label: string; right: string; fontZoom: 
 }
 
 export default function HomeScreen() {
-  const [clubId, setClubId] = useState<string>(() => loadClubId());
-
-  const [boards, setBoards] = useState<Record<number, BoardData>>(() => {
-    const init: Record<number, BoardData> = {};
-    BOARD_NRS.forEach((nr) => (init[nr] = parseBoard(null)));
-    return init;
-  });
-  const [scoreBoards, setScoreBoards] = useState<Record<number, BoardData>>(() => {
-    const init: Record<number, BoardData> = {};
-    BOARD_NRS.forEach((nr) => (init[nr] = parseBoard(null)));
-    return init;
-  });
-  const [cricketBoards, setCricketBoards] = useState<Record<number, BoardData>>(() => {
-    const init: Record<number, BoardData> = {};
-    BOARD_NRS.forEach((nr) => (init[nr] = parseBoard(null)));
-    return init;
-  });
-
-  const [fullscreenBoard, setFullscreenBoard] = useState<number | null>(null);
-
-  const [freshMap, setFreshMap] = useState<Record<number, boolean>>(() => {
-    const init: Record<number, boolean> = {};
-    BOARD_NRS.forEach((nr) => (init[nr] = false));
-    return init;
-  });
-  const [staleMap, setStaleMap] = useState<Record<number, boolean>>(() => {
-    const init: Record<number, boolean> = {};
-    BOARD_NRS.forEach((nr) => (init[nr] = false));
-    return init;
-  });
-  const [initialScoringBoard, setInitialScoringBoard] = useState<number | null>(null);
-
   const { width, height } = useWindowDimensions();
-
-  const isProbablyDesktop =
-    typeof window !== "undefined" &&
-    (((navigator as any)?.maxTouchPoints ?? 0) === 0 || Math.max(width, height) >= 900);
-
-  const [forcedLandscape, setForcedLandscape] = useState<boolean>(() => !!isProbablyDesktop);
-  const isPortrait = !forcedLandscape && height >= width;
-  const [mode, setMode] = useState<"display" | "scoring" | "cricket" | "history">("display");
-
+  const isPortrait = height >= width;
+  const [mode, setMode] = useState<"display" | "scoring" | "cricket" | "history">(() => {
+  const parsed = parseBoardIdFromText(getWindowSearch());
+    return parsed ? 'display' : 'scoring';
+    });
+  const [displayReturnMode, setDisplayReturnMode] = useState<"scoring" | "cricket">('scoring');
+  const [fullscreenBoardId, setFullscreenBoardId] = useState<string | null>(() => {
+    return parseBoardIdFromText(getWindowSearch());
+  });
+  const [watchedIds, setWatchedIds] = useState<string[]>(() => getSavedWatchedIds());
+  const [locationCoords, setLocationCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [allBoards, setAllBoards] = useState<Record<string, { id: string; raw: string; data: BoardData; lat: number | null; lng: number | null; deviceId: string | null; timestamp: number }>>({});
   const [fontZoom, setFontZoom] = useState(1);
   const [showHud, setShowHud] = useState(true);
-const [showFontSlider, setShowFontSlider] = useState(false);
-  const suppressNextBackgroundTapRef = useRef(false);
+  const [showFontSlider, setShowFontSlider] = useState(false);
+  const [scoringOpenNewKey, setScoringOpenNewKey] = useState(0);
+  const [cricketOpenNewKey, setCricketOpenNewKey] = useState(0);
+  const wakeLock = useDisplayWakeLock(mode === 'display');
+  const deviceId = useMemo(() => getOrCreateDeviceId(), []);
 
-  const markUiAction = () => {
-    suppressNextBackgroundTapRef.current = true;
-  };
-const [showClubIdDialog, setShowClubIdDialog] = useState(false);
-const [clubIdDraft, setClubIdDraft] = useState(clubId);
-const [clubIdError, setClubIdError] = useState("");
-const [clubIdSaving, setClubIdSaving] = useState(false);
-const handleBackgroundTap = () => {
-  if (suppressNextBackgroundTapRef.current) {
-    suppressNextBackgroundTapRef.current = false;
-    return;
-  }
+  useEffect(() => { saveWatchedIds(watchedIds); }, [watchedIds]);
 
-  // induláskor: scoring mode + club ID látszik, slider/history még nem
-  // 1. tap -> minden látszik
-  // 2. tap -> minden eltűnik
-  // 3. tap -> minden látszik
-  if (showHud && !showFontSlider) {
-    setShowHud(true);
-    setShowFontSlider(true);
-    return;
-  }
-
-  if (showHud && showFontSlider) {
-    setShowHud(false);
-    setShowFontSlider(false);
-    return;
-  }
-
-  setShowHud(true);
-  setShowFontSlider(true);
-};
-const validateClubId = async (candidateRaw: string) => {
-  const candidate = candidateRaw.trim().toLowerCase();
-  if (!candidate) return false;
-
-  try {
-    const scoreSnap = await get(ref(db, `score/${candidate}`));
-    if (scoreSnap.exists()) return true;
-
-    const msgSnap = await get(ref(db, `messages/${candidate}message1`));
-    if (msgSnap.exists()) return true;
-
-    const photoSnap = await get(ref(db, `photos/${candidate}photo1`));
-    if (photoSnap.exists()) return true;
-
-    const historySnap = await get(ref(db, `history/${candidate}`));
-    if (historySnap.exists()) return true;
-
-    return false;
-  } catch {
-    return false;
-  }
-};
-const confirmClubId = async () => {
-  const cleaned = clubIdDraft.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 32);
-
-  setClubIdSaving(true);
-  setClubIdError("");
-
-  const isValid = await validateClubId(cleaned);
-
-  if (!isValid) {
-    setClubId("");
-    saveClubId("");
-    setClubIdDraft("");
-    setClubIdError("Invalid club ID.");
-    setClubIdSaving(false);
-    return;
-  }
-
-  saveClubId(cleaned);
-  setClubId(cleaned);
-  setClubIdDraft(cleaned);
-  setClubIdError("");
-  setClubIdSaving(false);
-  setShowClubIdDialog(false);
-};
-const onGetClubIdPress = () => {
-  setClubIdError("");
-  if (typeof window !== "undefined") {
-    window.alert("This feature is under development.");
-  }
-};
-  const [qrBoard, setQrBoard] = useState<number | null>(null);
-  const [showQrChoiceDialog, setShowQrChoiceDialog] = useState(false);
-
-  const isTvLike = useMemo(() => {
-    try {
-      if (typeof navigator === "undefined") return false;
-      const ua = (navigator.userAgent || "").toLowerCase();
-      return ua.includes("webos") || ua.includes("tizen") || ua.includes("aft") || ua.includes("android tv");
-    } catch {
-      return false;
-    }
+  useEffect(() => {
+    void requestBrowserLikeLocation().then((coords) => {
+      setLocationCoords(coords);
+    });
   }, []);
 
-  const isLargeLandscape = width >= 1400 && height >= 800 && !isPortrait;
-
-  const safePad = isTvLike || isLargeLandscape ? 24 : 8;
-  const chipOffset = isTvLike || isLargeLandscape ? 24 : 10;
-  const chipBottom = isTvLike || isLargeLandscape ? 48 : 40;
-
-  const gridCols = isPortrait ? 2 : 4;
-  const gridRows = isPortrait ? 4 : 2;
-
-  const gridItemStyle = useMemo<StyleProp<ViewStyle>>(
-    () => [
-      styles.gridItemBase,
-      {
-        width: `${100 / gridCols}%`,
-        height: `${100 / gridRows}%`,
-      },
-    ],
-    [gridCols, gridRows]
-  );
-
-  const isGrid = fullscreenBoard == null;
-
-  const wakeLock = useDisplayWakeLock(mode === "display");
-
-  const [clubMessage, setClubMessage] = useState<string>("");
-  const [clubPhoto, setClubPhoto] = useState<string>("");
-
-  const [dismissedMessageValue, setDismissedMessageValue] = useState<string>(() =>
-    loadDismissedMessage(loadClubId())
-  );
-
-  const marqueeX = useRef(new Animated.Value(0)).current;
-  const { width: screenW } = useWindowDimensions();
-  const [msgW, setMsgW] = useState(0);
-useEffect(() => {
-  setClubIdDraft(clubId);
-}, [clubId]);
   useEffect(() => {
-    if (!forcedLandscape) return;
-    if (height > width) {
-      setForcedLandscape(false);
-    }
-  }, [forcedLandscape, width, height]);
+    const unsub = onValue(ref(db, 'boards'), (snap) => {
+      const value = snap.val() || {};
+      const next: Record<string, any> = {};
+      Object.entries(value).forEach(([id, rec]: any) => {
+        const raw = String(rec?.stats || '').trim();
+        next[String(id)] = {
+          id: String(id),
+          raw,
+          data: parseBoard(raw),
+          lat: typeof rec?.lat === 'number' ? rec.lat : null,
+          lng: typeof rec?.lng === 'number' ? rec.lng : null,
+          deviceId: rec?.deviceId ? String(rec.deviceId) : null,
+          timestamp: Number(rec?.timestamp) || 0,
+        };
+      });
+      setAllBoards(next);
+    });
+    return () => unsub();
+  }, []);
+
+  const visibleBoards = useMemo(() => {
+    const now = Date.now();
+    const watched = new Set(watchedIds);
+    return Object.values(allBoards)
+      .filter((b: any) => {
+        const fresh = !!b.timestamp && now - b.timestamp <= 20 * 60 * 1000;
+        if (!fresh) return false;
+        if (watched.has(b.id)) return true;
+        if (!locationCoords || b.lat == null || b.lng == null) return false;
+        return getDistanceMeters(locationCoords.lat, locationCoords.lng, b.lat, b.lng) <= 100;
+      })
+      .sort((a: any, b: any) => (b.timestamp || 0) - (a.timestamp || 0));
+  }, [allBoards, watchedIds, locationCoords]);
 
   useEffect(() => {
-    if (
-      typeof window === "undefined" ||
-      !window.location ||
-      typeof window.location.search !== "string"
-    ) {
+    if (fullscreenBoardId) addWatchedId(fullscreenBoardId);
+  }, [fullscreenBoardId]);
+
+  const handleRootExit = useCallback(() => {
+    if (typeof window !== 'undefined' && window.history.length > 1) window.history.back();
+  }, []);
+
+  const openScoringNewGame = useCallback(() => {
+    setMode('scoring');
+    setScoringOpenNewKey((v) => v + 1);
+  }, []);
+
+  const openCricketNewGame = useCallback(() => {
+    setMode('cricket');
+    setCricketOpenNewKey((v) => v + 1);
+  }, []);
+
+  const openDisplayFrom = useCallback((from: 'scoring' | 'cricket') => {
+    setDisplayReturnMode(from);
+    setFullscreenBoardId(null);
+    setMode('display');
+  }, []);
+
+  const openDisplayById = useCallback((id: string, from?: 'scoring' | 'cricket') => {
+    const nextId = String(id || '').trim().toUpperCase();
+    if (!nextId) return;
+    addWatchedId(nextId);
+    setWatchedIds((prev) => (prev.includes(nextId) ? prev : [nextId, ...prev]));
+    if (from) setDisplayReturnMode(from);
+    setFullscreenBoardId(nextId);
+    setMode('display');
+  }, []);
+
+  const goBackFromDisplay = useCallback(() => {
+    if (fullscreenBoardId) {
+      setFullscreenBoardId(null);
       return;
     }
+    setMode(displayReturnMode);
+  }, [displayReturnMode, fullscreenBoardId]);
 
-    const qs = new URLSearchParams(window.location.search);
-    const qClub = (qs.get("clubId") || qs.get("club") || "").trim().toLowerCase();
-    const qBoardRaw = (qs.get("board") || "").trim();
+  const currentFullscreenEntry = fullscreenBoardId ? allBoards[fullscreenBoardId] : null;
+  const gridBoards = fullscreenBoardId ? (currentFullscreenEntry ? [currentFullscreenEntry] : []) : visibleBoards;
+  const gridCount = gridBoards.length;
+  const gridCols = gridCount <= 0 ? 1 : gridCount < 4 ? gridCount : 2;
+  const gridRows = gridCount <= gridCols ? 1 : Math.ceil(gridCount / gridCols);
+  const gridItemStyle = useMemo<StyleProp<ViewStyle>>(() => [styles.gridItemBase, { width: `${100 / gridCols}%`, height: fullscreenBoardId ? '100%' as any : undefined }], [gridCols, fullscreenBoardId]);
 
-    const qBoard = qBoardRaw ? Number(qBoardRaw) : NaN;
-    const boardOk = Number.isFinite(qBoard) && BOARD_NRS.includes(qBoard as any);
+  if (mode === 'scoring') {
+    return <ScoringScreen2 clubId="" onExit={handleRootExit} onOpenCricket={openCricketNewGame} onOpenDisplay={() => openDisplayFrom('scoring')} onOpenDisplayById={(id) => openDisplayById(id, 'scoring')} openNewGameRequestKey={scoringOpenNewKey} />;
+  }
 
-    const hasAny = !!qClub || !!qBoardRaw;
-    if (!hasAny) return;
+  if (mode === 'cricket') {
+    return <KrikettScreen clubId="" onExit={handleRootExit} onOpenScoring={openScoringNewGame} onOpenDisplay={() => openDisplayFrom('cricket')} onOpenDisplayById={(id) => openDisplayById(id, 'cricket')} openNewGameRequestKey={cricketOpenNewKey} />;
+  }
 
-    if (qClub) {
-      saveClubId(qClub);
-      setClubId(qClub);
-    }
-
-    if (boardOk) {
-      setQrBoard(qBoard as number);
-      setShowQrChoiceDialog(true);
-
-      setFullscreenBoard(null);
-      setMode("display");
-      setInitialScoringBoard(null);
-    }
-  }, []);
-
-  useEffect(() => {
-    const v = loadDismissedMessage(clubId);
-    setDismissedMessageValue(v);
-  }, [clubId]);
-
-  const messageVisible = useMemo(() => {
-    const msg = (clubMessage ?? "").trim();
-    if (!msg) return false;
-    return msg !== (dismissedMessageValue ?? "");
-  }, [clubMessage, dismissedMessageValue]);
-
-  useEffect(() => {
-    if (!messageVisible || !isGrid) return;
-    if (!msgW) return;
-
-    let cancelled = false;
-
-    const run = () => {
-      marqueeX.setValue(0);
-
-      Animated.timing(marqueeX, {
-        toValue: 1,
-        duration: Math.max(8000, (screenW + msgW) * 12),
-        easing: Easing.linear,
-        useNativeDriver: true,
-      }).start(({ finished }) => {
-        if (finished && !cancelled) run();
-      });
-    };
-
-    run();
-
-    return () => {
-      cancelled = true;
-      marqueeX.stopAnimation();
-    };
-  }, [messageVisible, isGrid, clubMessage, msgW, screenW, marqueeX]);
-
-  const photoAvailable = useMemo(() => (clubPhoto ?? "").trim().length > 0, [clubPhoto]);
-  const [showPhotoDialog, setShowPhotoDialog] = useState(false);
-
-  useEffect(() => {
-    const msgRef = ref(db, `messages/${clubId}message1`);
-    const photoRef = ref(db, `photos/${clubId}photo1`);
-
-    const unsubMsg = onValue(
-      msgRef,
-      (snap) => {
-        const v = snap.val();
-        setClubMessage(v == null ? "" : String(v));
-      },
-      (err) => console.error("[RTDB ERROR]", `messages/${clubId}message1`, err?.message)
-    );
-
-    const unsubPhoto = onValue(
-      photoRef,
-      (snap) => {
-        const v = snap.val();
-        setClubPhoto(v == null ? "" : String(v));
-      },
-      (err) => console.error("[RTDB ERROR]", `photos/${clubId}photo1`, err?.message)
-    );
-
-    return () => {
-      unsubMsg();
-      unsubPhoto();
-    };
-  }, [clubId]);
-
-  const dismissMessage = () => {
-    const v = (clubMessage ?? "").trim();
-    setDismissedMessageValue(v);
-    saveDismissedMessage(clubId, v);
-  };
-
-  useEffect(() => {
-    setFullscreenBoard(null);
-    const emptyBoards = () => {
-      const init: Record<number, BoardData> = {};
-      BOARD_NRS.forEach((nr) => (init[nr] = parseBoard(null)));
-      return init;
-    };
-
-    setBoards(emptyBoards());
-    setScoreBoards(emptyBoards());
-    setCricketBoards(emptyBoards());
-
-    const unsubs = BOARD_NRS.flatMap((nr) => {
-      const scoreRef = ref(db, `score/${clubId}/${nr}`);
-      const cricketRef = ref(db, `cricket/${clubId}/${nr}`);
-
-      const unsubScore = onValue(
-        scoreRef,
-        (snap) => {
-          setScoreBoards((prev) => ({ ...prev, [nr]: parseBoard(snap.val()) }));
-        },
-        (err) => {
-          console.error("[RTDB ERROR]", `score/${clubId}/${nr}`, err?.message);
-        }
-      );
-
-      const unsubCricket = onValue(
-        cricketRef,
-        (snap) => {
-          setCricketBoards((prev) => ({ ...prev, [nr]: parseBoard(snap.val()) }));
-        },
-        (err) => {
-          console.error("[RTDB ERROR]", `cricket/${clubId}/${nr}`, err?.message);
-        }
-      );
-
-      return [unsubScore, unsubCricket];
-    });
-
-    return () => unsubs.forEach((u) => u());
-  }, [clubId]);
-
-  useEffect(() => {
-    const nextBoards: Record<number, BoardData> = {};
-    BOARD_NRS.forEach((nr) => {
-      const scoreBoard = scoreBoards[nr] ?? parseBoard(null);
-      const cricketBoard = cricketBoards[nr] ?? parseBoard(null);
-      nextBoards[nr] = cricketBoard.timestamp > scoreBoard.timestamp ? cricketBoard : scoreBoard;
-    });
-    setBoards(nextBoards);
-  }, [scoreBoards, cricketBoards]);
-
-  useEffect(() => {
-    const check = () => {
-      const now = Date.now();
-
-      const nextFresh: Record<number, boolean> = {};
-      const nextStale: Record<number, boolean> = {};
-
-      BOARD_NRS.forEach((nr) => {
-        const ts = boards[nr]?.timestamp || 0;
-
-        nextFresh[nr] = ts > 0 && now - ts <= FRESH_LIMIT_MS;
-        nextStale[nr] = ts === 0 ? true : now - ts > STALE_LIMIT_MS;
-      });
-
-      setFreshMap(nextFresh);
-      setStaleMap(nextStale);
-    };
-
-    check();
-    const id = setInterval(check, CHECK_INTERVAL_MS);
-    return () => clearInterval(id);
-  }, [boards]);
-
-  useEffect(() => {
-    if (typeof document === "undefined") return;
-
-    const handler = () => {
-      if (!document.fullscreenElement) {
-        setFullscreenBoard(null);
-      }
-    };
-
-    document.addEventListener("fullscreenchange", handler);
-    return () => document.removeEventListener("fullscreenchange", handler);
-  }, []);
-
-  useEffect(() => {
-    if (mode !== "display") return;
-    if (wakeLock.active) return;
-    if (!wakeLock.supported) {
-      console.info("[wake-lock] Screen Wake Lock API is not supported in this browser.");
-      return;
-    }
-    if (wakeLock.error) {
-      console.info("[wake-lock] Wake lock inactive:", wakeLock.error);
-    }
-  }, [mode, wakeLock.active, wakeLock.supported, wakeLock.error]);
-
-  const openBoardFullscreen = async (nr: number) => {
-    try {
-      await ensureDocFullscreen();
-    } catch (e) {
-      console.warn("requestFullscreen blocked:", e);
-    }
-    setFullscreenBoard(nr);
-  };
-
-  const saveBoardToHistory = async (boardNr: number) => {
-    try {
-      const raw = boards[boardNr]?.raw ?? "";
-      const value = raw.trim();
-      if (!value || value === "—" || value.startsWith("cricket_")) return;
-
-      await push(ref(db, `history/${clubId}/${boardNr}`), value);
-    } catch (e) {
-      console.error("[RTDB ERROR]", `history/${clubId}/${boardNr}`, e);
-    }
-  };
-
- const onPickClub = () => {
-  setClubIdDraft(clubId);
-  setClubIdError("");
-  setShowClubIdDialog(true);
-};
-
- const showBottomHud = mode === "display" && isGrid && showHud;
-const showExtraHud = showBottomHud && showFontSlider;
-
-  const chooseDisplayFromQr = async () => {
-    const b = qrBoard;
-    setShowQrChoiceDialog(false);
-    if (b == null) return;
-    await openBoardFullscreen(b);
-  };
-
-  const chooseScoringFromQr = async () => {
-    const b = qrBoard;
-    setShowQrChoiceDialog(false);
-    if (b == null) return;
-
-    try {
-      await ensureDocFullscreen();
-    } catch {}
-
-    setInitialScoringBoard(b);
-    setFullscreenBoard(null);
-    setMode("scoring");
-  };
+  if (mode === 'history') {
+    return <HistoryScreen deviceId={deviceId} onExit={() => setMode('display')} />;
+  }
 
   return (
     <View style={styles.safe}>
-      {mode === "scoring" ? (
-        <ScoringScreen2
-          clubId={clubId}
-          onExit={() => setMode("display")}
-          initialBoardNr={initialScoringBoard}
-        />
-      ) : mode === "cricket" ? (
-        <KrikettScreen
-          clubId={clubId}
-          onExit={() => setMode("display")}
-        />
-      ) : mode === "history" ? (
-        <HistoryScreen
-          clubId={clubId}
-          onExit={() => setMode("display")}
-        />
-      ) : (
-        <View
-          style={[styles.screen, { padding: safePad }]}
-          onStartShouldSetResponder={() => true}
-          onResponderRelease={handleBackgroundTap}
-        >
-     {showBottomHud ? (
-  <Pressable
-    onPress={() => {
-      markUiAction();
-      onPickClub();
-    }}
-    hitSlop={12}
-    style={({ pressed }) => [
-      styles.clubChip,
-      { right: chipOffset, bottom: chipBottom },
-      pressed ? styles.clubChipPressed : null,
-    ]}
-  >
-    <Text style={[styles.clubChipText, { fontSize: scaleFont(13, fontZoom) }]}>
-      {clubId || "club ID"}
-    </Text>
-  </Pressable>
-) : null}
+      <View style={[styles.screen, { padding: 8 }]}>
+        <Pressable onPress={goBackFromDisplay} hitSlop={12} style={styles.displayBackChip}>
+          <Text style={styles.displayBackChipText}>← back</Text>
+        </Pressable>
 
-{showBottomHud ? (
-  <View style={[styles.bottomLeftRow, { left: chipOffset, bottom: chipBottom }]}>
-    <Pressable
-  onPress={async () => {
-    markUiAction();
-    try {
-      await ensureDocFullscreen();
-    } catch {}
-    setMode("scoring");
-  }}
-  hitSlop={12}
-  style={({ pressed }) => [
-    styles.scoringChipNew,
-    pressed ? styles.scoringChipPressed : null,
-  ]}
->
-  <Image
-    source={require("./scoringmode.png")}
-    style={styles.scoringIcon}
-  />
+        <View style={[styles.bottomLeftRow, { left: 10, bottom: 40 }]}>
+          <Pressable onPress={() => setMode('history')} hitSlop={12} style={styles.scoringChip}>
+            <Text style={[styles.clubChipText, { fontSize: scaleFont(13, fontZoom) }]}>history</Text>
+          </Pressable>
+        </View>
 
-  <Text style={[styles.scoringChipText, { fontSize: scaleFont(13, fontZoom) }]}>
-   501
-  </Text>
-</Pressable>
-    <Pressable
-      onPress={async () => {
-        markUiAction();
-        try {
-          await ensureDocFullscreen();
-        } catch {}
-        setMode("cricket");
-      }}
-      hitSlop={12}
-      style={({ pressed }) => [
-        styles.scoringChipNew,
-        pressed ? styles.scoringChipPressed : null,
-      ]}
-    >
-      <Text style={[styles.scoringChipText, { fontSize: scaleFont(13, fontZoom) }]}>
-        Cricket
-      </Text>
-    </Pressable>
-    {showExtraHud ? (
-      <Pressable
-        onPress={() => {
-          markUiAction();
-          setMode("history");
-        }}
-        hitSlop={12}
-        style={({ pressed }) => [styles.scoringChip, pressed ? styles.clubChipPressed : null]}
-      >
-        <Text style={[styles.clubChipText, { fontSize: scaleFont(13, fontZoom) }]}>
-          history
-        </Text>
-      </Pressable>
-    ) : null}
-
-    {showExtraHud && photoAvailable ? (
-      <Pressable
-        onPress={() => {
-          markUiAction();
-          setShowPhotoDialog(true);
-        }}
-        hitSlop={12}
-        style={({ pressed }) => [styles.scoringChip, pressed ? styles.clubChipPressed : null]}
-      >
-        <Text style={[styles.clubChipText, { fontSize: scaleFont(13, fontZoom) }]}>
-          table
-        </Text>
-      </Pressable>
-    ) : null}
-  </View>
-) : null}
-
-          {showExtraHud && messageVisible ? (
-            <View style={[styles.subtitleBar, { bottom: chipOffset }]}>
-              <View style={{ flex: 1, overflow: "hidden" }}>
-                <Animated.Text
-                  onLayout={(e) => setMsgW(e.nativeEvent.layout.width)}
-                  numberOfLines={1}
-                  style={[
-                    styles.subtitleText,
-                    {
-                      fontSize: scaleFont(15, fontZoom),
-                      transform: [
-                        {
-                          translateX: marqueeX.interpolate({
-                            inputRange: [0, 1],
-                            outputRange: [screenW, -msgW],
-                          }),
-                        },
-                      ],
-                    },
-                  ]}
-                >
-                  {(clubMessage ?? "").trim()}
-                </Animated.Text>
-              </View>
-
-              <Pressable
-                onPress={() => {
-                  markUiAction();
-                  dismissMessage();
-                }}
-                hitSlop={12}
-                style={styles.subtitleCloseBtn}
-              >
-                <Text
-                  style={[
-                    styles.subtitleCloseText,
-                    { fontSize: scaleFont(18, fontZoom), lineHeight: scaleFont(20, fontZoom) },
-                  ]}
-                >
-                  ✕
-                </Text>
-              </Pressable>
-            </View>
-          ) : null}
-
-          {isGrid ? (
-            <View style={styles.grid}>
-              {BOARD_NRS.map((nr, idx) => (
-                <View key={nr} style={gridItemStyle}>
+        {fullscreenBoardId ? (
+          currentFullscreenEntry ? (
+            <BoardCard
+              boardNr={0}
+              data={currentFullscreenEntry.data}
+              isFullscreen={true}
+              onToggleFullscreen={() => setFullscreenBoardId(null)}
+              onUiAction={() => {}}
+              isFresh={true}
+              isStale={false}
+              fontZoom={fontZoom}
+            />
+          ) : (
+            <View style={[styles.card, styles.cardBase, styles.cardFullscreen, { alignItems: 'center', justifyContent: 'center' }]}><Text style={styles.emptyText}>No live data for this board.</Text></View>
+          )
+        ) : (
+          <ScrollView contentContainerStyle={{ paddingTop: 52, paddingBottom: 24 }}>
+            <View style={styles.gridWrap}>
+              {gridBoards.map((entry: any, idx) => (
+                <View key={entry.id} style={gridItemStyle}>
                   <BoardCard
-                    boardNr={nr}
-                    data={boards[nr]}
+                    boardNr={0}
+                    data={entry.data}
                     isFullscreen={false}
-                    onToggleFullscreen={() => openBoardFullscreen(nr)}
-                    onSaveHistory={isCricketBoardData(boards[nr]) ? undefined : () => saveBoardToHistory(nr)}
-                    onUiAction={markUiAction}
+                    onToggleFullscreen={() => setFullscreenBoardId(entry.id)}
+                    onUiAction={() => {}}
                     isAlt={idx % 2 === 1}
-                    isFresh={!!freshMap[nr]}
-                    isStale={!!staleMap[nr]}
+                    isFresh={true}
+                    isStale={false}
                     fontZoom={fontZoom}
                   />
                 </View>
               ))}
+              {gridBoards.length === 0 ? <Text style={[styles.emptyText, { marginTop: 80 }]}>No nearby or linked live boards.</Text> : null}
             </View>
-          ) : (
-            <View style={styles.fullWrap}>
-              <BoardCard
-                boardNr={fullscreenBoard as number}
-                data={boards[fullscreenBoard as number]}
-                isFullscreen={true}
-                onToggleFullscreen={() => setFullscreenBoard(null)}
-                onSaveHistory={isCricketBoardData(boards[fullscreenBoard as number]) ? undefined : () => saveBoardToHistory(fullscreenBoard as number)}
-                onUiAction={markUiAction}
-                isAlt={false}
-                isFresh={!!freshMap[fullscreenBoard as number]}
-                isStale={!!staleMap[fullscreenBoard as number]}
-                fontZoom={fontZoom}
-              />
-            </View>
-          )}
-
-          <Modal
-            visible={showPhotoDialog}
-            transparent
-            animationType="fade"
-            onRequestClose={() => setShowPhotoDialog(false)}
-          >
-            <View style={styles.photoOverlay}>
-              <View style={styles.photoCard}>
-                <View style={styles.photoHeader}>
-                  <Text style={[styles.photoTitle, { fontSize: scaleFont(16, fontZoom) }]}>Táblázat</Text>
-                  <Pressable
-                    onPress={() => setShowPhotoDialog(false)}
-                    hitSlop={12}
-                    style={styles.photoCloseBtn}
-                  >
-                    <Text
-                      style={[
-                        styles.photoCloseText,
-                        { fontSize: scaleFont(18, fontZoom), lineHeight: scaleFont(20, fontZoom) },
-                      ]}
-                    >
-                      ✕
-                    </Text>
-                  </Pressable>
-                </View>
-
-                <View style={styles.photoBody}>
-                  <Image source={{ uri: toImageUri(clubPhoto) }} style={styles.photoImage} resizeMode="contain" />
-                </View>
-              </View>
-            </View>
-          </Modal>
-
-          <Modal
-            visible={showQrChoiceDialog}
-            transparent
-            animationType="fade"
-            onRequestClose={() => setShowQrChoiceDialog(false)}
-          >
-            <Pressable style={styles.modalOverlay} onPress={() => setShowQrChoiceDialog(false)}>
-              <Pressable style={styles.modalCard} onPress={() => {}}>
-                <Text style={[styles.modalTitle, { fontSize: scaleFont(18, fontZoom) }]}>
-                  Hogyan szeretnéd használni?
-                </Text>
-
-                <Text style={[styles.modalLabel, { fontSize: scaleFont(14, fontZoom) }]}>
-                  Club: {clubId} • Board: {qrBoard ?? "-"}
-                </Text>
-
-                <View style={styles.modalBtns}>
-                  <Pressable
-                    style={[styles.modalBtn, styles.modalBtnOk, styles.modalBtnWithIcon]}
-                    onPress={() => void chooseScoringFromQr()}
-                  >
-                    <Image source={require("./keypad.png")} style={styles.modalBtnWhiteIcon} />
-                    <Text style={[styles.modalBtnTextOk, { fontSize: scaleFont(14, fontZoom) }]}>SCORING</Text>
-                  </Pressable>
-
-                  <Pressable
-                    style={[styles.modalBtn, styles.modalBtnGhost, styles.modalBtnWithIcon]}
-                    onPress={() => void chooseDisplayFromQr()}
-                  >
-                    <Image source={require("./scoredisp.png")} style={styles.modalBtnIcon} />
-                    <Text style={[styles.modalBtnTextGhost, { fontSize: scaleFont(14, fontZoom) }]}>DISPLAY</Text>
-                  </Pressable>
-                </View>
-              </Pressable>
-            </Pressable>
-          </Modal>
-          <Modal
-  visible={showClubIdDialog}
-  transparent
-  animationType="fade"
-  onRequestClose={() => setShowClubIdDialog(false)}
->
-  <Pressable style={styles.modalOverlay} onPress={() => setShowClubIdDialog(false)}>
-    <Pressable style={styles.modalCard} onPress={() => {}}>
-      <Text style={[styles.modalTitle, { fontSize: scaleFont(18, fontZoom) }]}>
-        Club ID
-      </Text>
-
-      <TextInput
-        value={clubIdDraft}
-        onChangeText={(v) => {
-          setClubIdDraft(v);
-          if (clubIdError) setClubIdError("");
-        }}
-        placeholder="club ID"
-        placeholderTextColor="rgba(0,0,0,0.35)"
-        autoCapitalize="none"
-        autoCorrect={false}
-        style={styles.clubIdInput}
-      />
-
-      {clubIdError ? (
-        <Text style={styles.clubIdErrorText}>{clubIdError}</Text>
-      ) : null}
-
-      <Pressable onPress={onGetClubIdPress} hitSlop={8} style={styles.clubIdHelpWrap}>
-        <Text style={styles.clubIdHelpText}>
-          Don't have a club ID yet? Get one here.
-        </Text>
-      </Pressable>
-
-      <View style={styles.modalBtns}>
-        <Pressable
-          style={[styles.modalBtn, styles.modalBtnGhost]}
-          onPress={() => setShowClubIdDialog(false)}
-        >
-          <Text style={styles.modalBtnTextGhost}>Cancel</Text>
-        </Pressable>
-
-        <Pressable
-          style={[styles.modalBtn, styles.modalBtnOk, clubIdSaving ? { opacity: 0.7 } : null]}
-          onPress={() => {
-            if (!clubIdSaving) void confirmClubId();
-          }}
-        >
-          <Text style={styles.modalBtnTextOk}>
-            {clubIdSaving ? "Checking..." : "OK"}
-          </Text>
-        </Pressable>
+          </ScrollView>
+        )}
       </View>
-    </Pressable>
-  </Pressable>
-</Modal>
-
-          {showFontSlider ? (
-            <View style={styles.fontZoomOverlay} pointerEvents="box-none">
-              <Pressable onPress={() => markUiAction()} style={styles.fontZoomPanel}>
-                <Text style={[styles.fontZoomLabel, { fontSize: scaleFont(12, fontZoom) }]}>
-                  Font zoom
-                </Text>
-
-                <View style={styles.fontZoomRow}>
-                  <Pressable
-                    onPress={() => {
-                      markUiAction();
-                      setFontZoom((z) => clamp(Math.round((z - FONT_ZOOM_STEP) * 10) / 10, FONT_ZOOM_MIN, FONT_ZOOM_MAX));
-                    }}
-                    style={styles.fontZoomBtn}
-                  >
-                    <Text style={styles.fontZoomBtnText}>−</Text>
-                  </Pressable>
-
-                  {typeof document !== "undefined" ? (
-                    <input
-                      type="range"
-                      min={FONT_ZOOM_MIN}
-                      max={FONT_ZOOM_MAX}
-                      step={0.1}
-                      value={fontZoom}
-                      onClick={(e) => e.stopPropagation()}
-                      onChange={(e) => {
-                        markUiAction();
-                        const next = clamp(Number((e.target as HTMLInputElement).value), FONT_ZOOM_MIN, FONT_ZOOM_MAX);
-                        setFontZoom(next);
-                      }}
-                      style={{ width: 180 }}
-                    />
-                  ) : null}
-
-                  <Pressable
-                    onPress={() => {
-                      markUiAction();
-                      setFontZoom((z) => clamp(Math.round((z + FONT_ZOOM_STEP) * 10) / 10, FONT_ZOOM_MIN, FONT_ZOOM_MAX));
-                    }}
-                    style={styles.fontZoomBtn}
-                  >
-                    <Text style={styles.fontZoomBtnText}>+</Text>
-                  </Pressable>
-                </View>
-
-                <Text style={[styles.fontZoomValue, { fontSize: scaleFont(12, fontZoom) }]}>
-                  {fontZoom.toFixed(1)}x
-                </Text>
-              </Pressable>
-            </View>
-          ) : null}
-        </View>
-      )}
     </View>
   );
 }
@@ -1458,6 +809,12 @@ scoringChipText: {
   color: "#fff",
   fontWeight: "900",
   letterSpacing: 0.4,
+},
+gridWrap: {
+  flexDirection: 'row',
+  flexWrap: 'wrap',
+  alignItems: 'flex-start',
+  alignContent: 'flex-start',
 },
   clubChip: {
     position: "absolute",
@@ -1571,42 +928,36 @@ scoringChipText: {
   },
 
   card: {
-  flex: 1,
-  borderRadius: 18,
-  padding: 6,
-  borderWidth: 1,
-  borderColor: "rgba(255,255,255,0.14)",
-  overflow: "hidden",
-},
-cardBase: { backgroundColor: CARD_BG_A },
-cardAlt: { backgroundColor: CARD_BG_B },
+    flex: 1,
+    borderRadius: 18,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.14)",
+    overflow: "hidden",
+  },
+  cardBase: { backgroundColor: CARD_BG_A },
+  cardAlt: { backgroundColor: CARD_BG_B },
 
-cardGrid: {},
-cardFullscreen: {
-  flex: 1,
-},
+  cardGrid: {},
+  cardFullscreen: {
+    flex: 1,
+  },
 
-cardHeader: {
-  position: "absolute",
-  bottom: 2,
-  left: 4,
-  right: 4,
-  zIndex: 20,
-  elevation: 8,
-  flexDirection: "row",
-  alignItems: "center",
-  justifyContent: "space-between",
-  pointerEvents: "box-none",
-},
+  cardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 6,
+  },
 
-boardBadge: {
-  width: 28,
-  height: 28,
-  borderRadius: 14,
-  backgroundColor: BADGE_BG,
-  alignItems: "center",
-  justifyContent: "center",
-},
+  boardBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: BADGE_BG,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   boardBadgeText: {
     fontSize: 13,
     fontWeight: "900",
@@ -1627,11 +978,10 @@ boardBadge: {
     fontSize: 14,
   },
 
- bodyWrap: {
-  flex: 1,
-  position: "relative",
-  paddingTop: 10,
-},
+  bodyWrap: {
+    flex: 1,
+    position: "relative",
+  },
 
   nameLegsRow: {
     flexDirection: "row",
@@ -2112,6 +1462,23 @@ clubIdHelpText: {
     backgroundColor: "rgba(255,255,255,0.10)",
     alignItems: "center",
     justifyContent: "center",
+  },
+  displayBackChip: {
+    position: "absolute",
+    left: 10,
+    top: 10,
+    zIndex: 60,
+    backgroundColor: "rgba(0,0,0,0.82)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.18)",
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  displayBackChipText: {
+    color: "rgba(255,255,255,0.92)",
+    fontSize: 13,
+    fontWeight: "700",
   },
   fontZoomBtnText: {
     color: "white",
