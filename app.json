@@ -3,7 +3,7 @@
     "name": "dartsdisplay",
     "slug": "dartsdisplay",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/images/icon.png",
     "scheme": "dartsdisplay",
     "userInterfaceStyle": "automatic",
@@ -18,9 +18,15 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "edgeToEdgeEnabled": true,
+      "edgeToEdgeEnabled": false,
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.dartsdisplay"
+      "package": "com.anonymous.dartsdisplay",
+      
+    },
+     "androidStatusBar": {
+      "hidden": false,
+      "translucent": false,
+      "barStyle": "light-content"
     },
     "web": {
       "output": "static",

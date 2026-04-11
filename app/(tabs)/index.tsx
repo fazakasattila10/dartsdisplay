@@ -2,6 +2,7 @@ import { onValue, ref } from "firebase/database";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DimensionValue, StyleProp, ViewStyle } from "react-native";
 import {
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -9,12 +10,12 @@ import {
   View,
   useWindowDimensions
 } from "react-native";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { db } from "../../lib/firebase";
 import HistoryScreen from "./HistoryScreen";
 import KrikettScreen from "./KrikettScreen";
 import ScoringScreen2 from "./ScoringScreen2";
-import { addWatchedId, getDistanceMeters, getOrCreateDeviceId, getSavedWatchedIds, parseBoardIdFromText, requestBrowserLikeLocation, saveWatchedIds } from "./broadcastShared";
-
+import { addWatchedId, getDistanceMeters, getSavedWatchedIds, parseBoardIdFromText, requestBrowserLikeLocation, saveWatchedIds } from "./broadcastShared";
 type BoardData = {
   raw: string;
   parts: string[];
@@ -576,11 +577,14 @@ export default function HomeScreen() {
   const [fontZoom, setFontZoom] = useState(1);
   const [showHud, setShowHud] = useState(true);
   const [showFontSlider, setShowFontSlider] = useState(false);
-  const [scoringOpenNewKey, setScoringOpenNewKey] = useState(0);
-  const [cricketOpenNewKey, setCricketOpenNewKey] = useState(0);
   const wakeLock = useDisplayWakeLock(mode === 'display');
-  const deviceId = useMemo(() => getOrCreateDeviceId(), []);
-
+  const [showGameMenu, setShowGameMenu] = useState(false);
+  const gameMode = mode === 'cricket' ? 'cricket' : 'scoring';
+  const [scoringOpenNewKey, setScoringOpenNewKey] = useState<number | undefined>(undefined);
+  const [cricketOpenNewKey, setCricketOpenNewKey] = useState<number | undefined>(undefined);
+  const [scoringReplayKey, setScoringReplayKey] = useState<number | undefined>(undefined);
+  const [cricketReplayKey, setCricketReplayKey] = useState<number | undefined>(undefined);
+  const pinchStartZoomRef = useRef(1);
   useEffect(() => { saveWatchedIds(watchedIds); }, [watchedIds]);
 
   useEffect(() => {
@@ -627,26 +631,55 @@ export default function HomeScreen() {
   useEffect(() => {
     if (fullscreenBoardId) addWatchedId(fullscreenBoardId);
   }, [fullscreenBoardId]);
+  const displayPinchGesture = useMemo(
+  () =>
+    Gesture.Pinch()
+      .onBegin(() => {
+        pinchStartZoomRef.current = fontZoom;
+      })
+      .onUpdate((event) => {
+        const nextZoom = clamp(
+          pinchStartZoomRef.current * event.scale,
+          FONT_ZOOM_MIN,
+          FONT_ZOOM_MAX
+        );
+        setFontZoom(nextZoom);
+      }),
+  [fontZoom]
+);
+  const replayCurrentGame = useCallback(() => {
+  setShowGameMenu(false);
 
+  if (gameMode === 'scoring') {
+    setScoringReplayKey((v) => (v ?? 0) + 1);
+    return;
+  }
+
+  setCricketReplayKey((v) => (v ?? 0) + 1);
+}, [gameMode]);
+  const closeGameMenu = useCallback(() => {
+    setShowGameMenu(false);
+  }, []);
   const handleRootExit = useCallback(() => {
     if (typeof window !== 'undefined' && window.history.length > 1) window.history.back();
   }, []);
+const openScoringNewGame = useCallback(() => {
+  setShowGameMenu(false);
+  setMode('scoring');
+  setScoringOpenNewKey((v) => (v ?? 0) + 1);
+}, []);
 
-  const openScoringNewGame = useCallback(() => {
-    setMode('scoring');
-    setScoringOpenNewKey((v) => v + 1);
-  }, []);
-
-  const openCricketNewGame = useCallback(() => {
-    setMode('cricket');
-    setCricketOpenNewKey((v) => v + 1);
-  }, []);
-
-  const openDisplayFrom = useCallback((from: 'scoring' | 'cricket') => {
-    setDisplayReturnMode(from);
-    setFullscreenBoardId(null);
-    setMode('display');
-  }, []);
+const openCricketNewGame = useCallback(() => {
+  setShowGameMenu(false);
+  setMode('cricket');
+  setCricketOpenNewKey((v) => (v ?? 0) + 1);
+}, []);
+const openDisplayFrom = useCallback((from: 'scoring' | 'cricket') => {
+  setShowGameMenu(false);
+  setDisplayReturnMode(from);
+  setFullscreenBoardId(null);
+  setMode('display');
+}, []);
 
   const openDisplayById = useCallback((id: string, from?: 'scoring' | 'cricket') => {
     const nextId = String(id || '').trim().toUpperCase();
@@ -673,20 +706,80 @@ export default function HomeScreen() {
   const gridRows = gridCount <= gridCols ? 1 : Math.ceil(gridCount / gridCols);
   const gridItemStyle = useMemo<StyleProp<ViewStyle>>(() => [styles.gridItemBase, { width: `${100 / gridCols}%`, height: fullscreenBoardId ? '100%' as any : undefined }], [gridCols, fullscreenBoardId]);
 
-  if (mode === 'scoring') {
-    return <ScoringScreen2 clubId="" onExit={handleRootExit} onOpenCricket={openCricketNewGame} onOpenDisplay={() => openDisplayFrom('scoring')} onOpenDisplayById={(id) => openDisplayById(id, 'scoring')} openNewGameRequestKey={scoringOpenNewKey} />;
-  }
-
-  if (mode === 'cricket') {
-    return <KrikettScreen clubId="" onExit={handleRootExit} onOpenScoring={openScoringNewGame} onOpenDisplay={() => openDisplayFrom('cricket')} onOpenDisplayById={(id) => openDisplayById(id, 'cricket')} openNewGameRequestKey={cricketOpenNewKey} />;
-  }
-
-  if (mode === 'history') {
-    return <HistoryScreen deviceId={deviceId} onExit={() => setMode('display')} />;
-  }
-
+if (mode === 'scoring' || mode === 'cricket') {
   return (
     <View style={styles.safe}>
+      {gameMode === 'scoring' ? (
+       <ScoringScreen2
+          clubId=""
+          onExit={handleRootExit}
+          onOpenCricket={openCricketNewGame}
+          onOpenDisplay={() => openDisplayFrom('scoring')}
+          onOpenDisplayById={(id) => openDisplayById(id, 'scoring')}
+          openNewGameRequestKey={scoringOpenNewKey}
+          replayRequestKey={scoringReplayKey}
+        />
+      ) : (
+        <KrikettScreen
+          clubId=""
+          onExit={handleRootExit}
+          onOpenScoring={openScoringNewGame}
+          onOpenDisplay={() => openDisplayFrom('cricket')}
+          onOpenDisplayById={(id) => openDisplayById(id, 'cricket')}
+          openNewGameRequestKey={cricketOpenNewKey}
+          replayRequestKey={cricketReplayKey}
+        />
+      )}
+
+      <Pressable
+        style={styles.rootCornerMenu}
+        onPress={() => setShowGameMenu((v) => !v)}
+      >
+        <Text style={styles.rootCornerMenuText}>☰</Text>
+      </Pressable>
+
+      <Modal
+        visible={showGameMenu}
+        transparent
+        animationType="fade"
+        onRequestClose={closeGameMenu}
+      >
+        <Pressable style={styles.quickMenuOverlay} onPress={closeGameMenu}>
+          <View style={styles.quickMenuCard}>
+            <Pressable style={styles.quickMenuItem} onPress={openScoringNewGame}>
+              <Text style={styles.quickMenuItemText}>new 501</Text>
+            </Pressable>
+
+            <Pressable style={styles.quickMenuItem} onPress={openCricketNewGame}>
+              <Text style={styles.quickMenuItemText}>new Cricket</Text>
+            </Pressable>
+
+            <Pressable
+              style={styles.quickMenuItem}
+              onPress={() => openDisplayFrom(gameMode)}
+            >
+              <Text style={styles.quickMenuItemText}>Big Display</Text>
+            </Pressable>
+            <Pressable
+              style={styles.quickMenuItem}
+              onPress={replayCurrentGame}
+            >
+              <Text style={styles.quickMenuItemText}>re-play</Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Modal>
+    </View>
+  );
+}
+if (mode === 'history') {
+  return <HistoryScreen clubId="" onExit={() => setMode('display')} />;
+}
+
+  return (
+    
+    <View style={styles.safe}>
+      <GestureDetector gesture={displayPinchGesture}>
       <View style={[styles.screen, { padding: 8 }]}>
         <Pressable onPress={goBackFromDisplay} hitSlop={12} style={styles.displayBackChip}>
           <Text style={styles.displayBackChipText}>← back</Text>
@@ -695,6 +788,30 @@ export default function HomeScreen() {
         <View style={[styles.bottomLeftRow, { left: 10, bottom: 40 }]}>
           <Pressable onPress={() => setMode('history')} hitSlop={12} style={styles.scoringChip}>
             <Text style={[styles.clubChipText, { fontSize: scaleFont(13, fontZoom) }]}>history</Text>
+          </Pressable>
+
+          <Pressable
+            onPress={() => setFontZoom((z) => clamp(z - FONT_ZOOM_STEP, FONT_ZOOM_MIN, FONT_ZOOM_MAX))}
+            hitSlop={12}
+            style={styles.scoringChip}
+          >
+            <Text style={[styles.clubChipText, { fontSize: scaleFont(13, fontZoom) }]}> - </Text>
+          </Pressable>
+
+          {/* <Pressable
+            onPress={() => setFontZoom(1)}
+            hitSlop={12}
+            style={styles.scoringChip}
+          >
+            <Text style={[styles.clubChipText, { fontSize: scaleFont(13, fontZoom) }]}>A</Text>
+          </Pressable> */}
+
+          <Pressable
+            onPress={() => setFontZoom((z) => clamp(z + FONT_ZOOM_STEP, FONT_ZOOM_MIN, FONT_ZOOM_MAX))}
+            hitSlop={12}
+            style={styles.scoringChip}
+          >
+            <Text style={[styles.clubChipText, { fontSize: scaleFont(13, fontZoom) }]}> + </Text>
           </Pressable>
         </View>
 
@@ -736,6 +853,7 @@ export default function HomeScreen() {
           </ScrollView>
         )}
       </View>
+      </GestureDetector>
     </View>
   );
 }
@@ -1462,6 +1580,60 @@ clubIdHelpText: {
     backgroundColor: "rgba(255,255,255,0.10)",
     alignItems: "center",
     justifyContent: "center",
+  },
+  rootCornerMenu: {
+  position: 'absolute',
+  right: 14,
+  bottom: 34,
+  zIndex: 5000,
+  width: 58,
+  height: 58,
+  borderRadius: 999,
+  alignItems: 'center',
+  justifyContent: 'center',
+  backgroundColor: 'rgba(0,0,0,0.86)',
+  borderWidth: 1,
+  borderColor: CLUB_CHIP_BORDER,
+},
+
+  rootCornerMenuText: {
+    color: '#fff',
+    fontSize: 28,
+    fontWeight: '900',
+    lineHeight: 30,
+  },
+
+  quickMenuOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.28)',
+    justifyContent: 'flex-end',
+    alignItems: 'flex-end',
+    paddingRight: 14,
+    paddingBottom: 102,
+  },
+
+  quickMenuCard: {
+    minWidth: 180,
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    paddingVertical: 8,
+    overflow: 'hidden',
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+  },
+
+  quickMenuItem: {
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+
+  quickMenuItemText: {
+    color: '#111',
+    fontSize: 16,
+    fontWeight: '800',
   },
   displayBackChip: {
     position: "absolute",

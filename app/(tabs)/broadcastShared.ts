@@ -1,6 +1,6 @@
-import { get, ref, set } from 'firebase/database';
-import { db } from '../../lib/firebase';
 
+import { equalTo, get, orderByChild, query, ref, set } from 'firebase/database';
+import { db } from '../../lib/firebase';
 const DEVICE_ID_KEY = 'broadcast.deviceId';
 const BOARD_ID_KEY = 'broadcast.boardId';
 const WATCHED_KEY = 'broadcast.watchedIds';
@@ -42,9 +42,24 @@ export function getOrCreateDeviceId() {
   return next;
 }
 
-export async function getOrCreateBoardId() {
-  const existing = readStore(BOARD_ID_KEY);
-  if (existing) return existing;
+export async function getOrCreateBoardId(deviceId: string) {
+  const cached = readStore(BOARD_ID_KEY);
+  if (cached) return cached;
+
+  try {
+    const q = query(ref(db, 'boards'), orderByChild('deviceId'), equalTo(deviceId));
+    const existingSnap = await get(q);
+
+    if (existingSnap.exists()) {
+      const value = existingSnap.val() as Record<string, any>;
+      const existingBoardId = Object.keys(value)[0];
+      if (existingBoardId) {
+        writeStore(BOARD_ID_KEY, existingBoardId);
+        return existingBoardId;
+      }
+    }
+  } catch {}
+
   while (true) {
     const candidate = randomId(6);
     const snap = await get(ref(db, `boards/${candidate}`));

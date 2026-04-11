@@ -25,6 +25,7 @@ type Props = {
   onOpenDisplay?: () => void;
   onOpenDisplayById?: (id: string) => void;
   openNewGameRequestKey?: number;
+  replayRequestKey?: number;
 };
 
 type CricketVariant = 'own' | 'penalty';
@@ -540,8 +541,7 @@ function buildCricketValueString(players: PlayerState[], round: number, deviceIn
   ].join('_');
 }
 
-export default function KrikettScreen({ onExit, clubId, initialBoardNr, onOpenScoring, onOpenDisplay, onOpenDisplayById, openNewGameRequestKey }: Props) {
-  useDisplayWakeLock(true);
+export default function KrikettScreen({ onExit, clubId, initialBoardNr, onOpenScoring, onOpenDisplay, onOpenDisplayById, openNewGameRequestKey, replayRequestKey }: Props) {  useDisplayWakeLock(true);
   const { width, height } = useWindowDimensions();
   const isPortrait = height >= width;
   const initialVirtualPrefs = useMemo(() => loadVirtualPrefs(), []);
@@ -561,7 +561,6 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr, onOpenSc
   const [locationCoords, setLocationCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [locationGranted, setLocationGranted] = useState(false);
   const [showSetupDialog, setShowSetupDialog] = useState(false);
-  const [showQuickMenu, setShowQuickMenu] = useState(false);
   const [showBoardDialog, setShowBoardDialog] = useState(false);
   const [showLevelPicker, setShowLevelPicker] = useState(false);
   const playersRef = useRef(players);
@@ -577,6 +576,7 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr, onOpenSc
     vsVirtual: initialVirtualPrefs.enabled,
     virtualLevel: initialVirtualPrefs.level,
   });
+  
   const [nameTouched, setNameTouched] = useState<boolean[]>([false, false, false, false]);
   const [menuBoardTmp, setMenuBoardTmp] = useState<number | null>(initialBoardNr ?? null);
   const [warnedBusyBoard, setWarnedBusyBoard] = useState<number | null>(null);
@@ -597,7 +597,7 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr, onOpenSc
   const roundFlashScale = useRef(new Animated.Value(0.88)).current;
 
   const turnLabel = useMemo(() => buildTurnLabel(pendingTurn), [pendingTurn]);
-
+  const handledReplayKeyRef = useRef<number | null>(null);
   const saveNameHistoryFrom = useCallback((names: string[]) => {
     const nextHistory = Array.from(
       new Set([...names.filter((v) => v && !/^PL\./i.test(v)), ...playerNameHistory])
@@ -937,7 +937,6 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr, onOpenSc
   const replayCurrentMatch = () => {
     const replayDraft = buildDraftFromCurrent();
     setDraft(replayDraft);
-    setShowQuickMenu(false);
     setShowSetupDialog(false);
     setShowBoardDialog(false);
     startGame(variant, boardNr != null, boardNr, replayDraft);
@@ -949,10 +948,14 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr, onOpenSc
     handledOpenNewGameKeyRef.current = openNewGameRequestKey;
     openSetup();
   }, [openNewGameRequestKey]);
-
+  useEffect(() => {
+    if (replayRequestKey == null) return;
+    if (handledReplayKeyRef.current === replayRequestKey) return;
+    handledReplayKeyRef.current = replayRequestKey;
+    replayCurrentMatch();
+  }, [replayRequestKey]);
   const openSetup = () => {
     ensureKrikettFullscreen();
-    setShowQuickMenu(false);
     setDraft(buildDraftFromCurrent());
     setWarnedBusyBoard(null);
     setMenuBoardTmp(boardNr);
@@ -1276,31 +1279,11 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr, onOpenSc
           )}
         </View>
 
-        <Pressable style={styles.cornerMenu} onPress={() => setShowQuickMenu((v) => !v)}>
-          <Text style={styles.cornerText}>â˜°</Text>
-        </Pressable>
+      
       </View>
 
 
-      <Modal visible={showQuickMenu} transparent animationType="fade" onRequestClose={() => setShowQuickMenu(false)}>
-        <Pressable style={styles.quickMenuOverlay} onPress={() => setShowQuickMenu(false)}>
-          <View style={styles.quickMenuCard}>
-            <Pressable style={styles.quickMenuItem} onPress={() => { setShowQuickMenu(false); onOpenScoring?.(); }}>
-              <Text style={styles.quickMenuItemText}>new 501</Text>
-            </Pressable>
-            <Pressable style={styles.quickMenuItem} onPress={() => { setShowQuickMenu(false); openSetup(); }}>
-              <Text style={styles.quickMenuItemText}>new Cricket</Text>
-            </Pressable>
-            <Pressable style={styles.quickMenuItem} onPress={() => { setShowQuickMenu(false); onOpenDisplay?.(); }}>
-              <Text style={styles.quickMenuItemText}>Big Display</Text>
-            </Pressable>
-            <Pressable style={styles.quickMenuItem} onPress={replayCurrentMatch}>
-              <Text style={styles.quickMenuItemText}>re-play</Text>
-            </Pressable>
-          </View>
-        </Pressable>
-      </Modal>
-
+     
       <Modal visible={showSetupDialog} transparent animationType="fade" onRequestClose={() => setShowSetupDialog(false)}>
         <View style={styles.modalOverlay}>
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowSetupDialog(false)} />

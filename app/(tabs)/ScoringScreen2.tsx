@@ -15,8 +15,10 @@ import {
   View,
   useWindowDimensions
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { db } from '../../lib/firebase';
 import { addWatchedId, buildBoardShareUrl, buildQrImageUrl, getOrCreateBoardId, getOrCreateDeviceId, parseBoardIdFromText, publishBoardRecord, requestBrowserLikeLocation } from './broadcastShared';
+
 import { generateVirtualLeg } from './virtualDarts';
 type Props = {
   onExit: () => void;
@@ -26,6 +28,7 @@ type Props = {
   onOpenDisplay?: () => void;
   onOpenDisplayById?: (id: string) => void;
   openNewGameRequestKey?: number;
+  replayRequestKey?: number;
 };
 
 type PlayerStats = {
@@ -357,8 +360,7 @@ function useDisplayWakeLock(enabled: boolean) {
 
   return state;
 }
-export default function ScoringScreen2({ onExit, clubId, initialBoardNr, onOpenCricket, onOpenDisplay, onOpenDisplayById, openNewGameRequestKey }: Props) {
-  const { width, height } = useWindowDimensions();
+export default function ScoringScreen2({ onExit, clubId, initialBoardNr, onOpenCricket, onOpenDisplay, onOpenDisplayById, openNewGameRequestKey, replayRequestKey }: Props) {  const { width, height } = useWindowDimensions();
   const isPortrait = height >= width;
   const wakeLock = useDisplayWakeLock(true);
     const initialVirtualPrefs = useMemo(() => loadVirtualPrefs(), []);
@@ -384,8 +386,6 @@ export default function ScoringScreen2({ onExit, clubId, initialBoardNr, onOpenC
   const [saveInProgress, setSaveInProgress] = useState(false);
   const [showNamesDialog, setShowNamesDialog] = useState(false);
   const [showMenuDialog1, setShowMenuDialog1] = useState(false);
-  const [showQuickMenu, setShowQuickMenu] = useState(false);
-
   const [showMenuName1Suggestions, setShowMenuName1Suggestions] = useState(false);
   const [showMenuName2Suggestions, setShowMenuName2Suggestions] = useState(false);
   const [showMenuDialog2, setShowMenuDialog2] = useState(false);
@@ -395,6 +395,7 @@ export default function ScoringScreen2({ onExit, clubId, initialBoardNr, onOpenC
   const [warnedBusyBoard, setWarnedBusyBoard] = useState<number | null>(null);
   const [showOnlineInfo, setShowOnlineInfo] = useState(false);
   const handledOpenNewGameKeyRef = useRef<number | null>(null);
+  const handledReplayKeyRef = useRef<number | null>(null);
   const [showScannerScreen, setShowScannerScreen] = useState(false);
   const [hasScannedQr, setHasScannedQr] = useState(false);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
@@ -505,28 +506,19 @@ const requestAppLocation = useCallback(async () => {
     return false;
   }
 }, []);
-  useEffect(() => {
-  void getOrCreateBoardId().then(setBoardId);
+ useEffect(() => {
+  void getOrCreateBoardId(deviceInfoRef.current).then(setBoardId);
 
-  if (Platform.OS === 'web') {
-    void requestAppLocation();
-    return;
-  }
-
-  void Location.getForegroundPermissionsAsync()
-    .then(async (perm) => {
-      if (perm.status !== 'granted') {
-        setLocationCoords(null);
-        setLocationGranted(false);
-        return;
-      }
-      await requestAppLocation();
-    })
-    .catch(() => {
+  void requestBrowserLikeLocation().then((coords) => {
+    if (coords) {
+      setLocationCoords(coords);
+      setLocationGranted(true);
+    } else {
       setLocationCoords(null);
       setLocationGranted(false);
-    });
-}, [requestAppLocation]);
+    }
+  });
+}, []);
 
   const [myRole, setMyRole] = useState<null | 'L' | 'R'>(null);
   const [onlineDisabled, setOnlineDisabled] = useState(false);
@@ -632,20 +624,20 @@ const [pendingVirtualCheckout, setPendingVirtualCheckout] = useState<null | {
     ].join('_');
   }
 
-  async function pushToFirebase() {
-    if (!boardId) return;
-    if (!locationGranted && !qrActivated) return;
-    try {
-      await publishBoardRecord({
-        boardId,
-        kind: 'score',
-        stats: buildAndroidValueString(),
-        deviceId: deviceInfoRef.current,
-        lat: locationGranted ? locationCoords?.lat ?? null : null,
-        lng: locationGranted ? locationCoords?.lng ?? null : null,
-      });
-    } catch {}
-  }
+async function pushToFirebase() {
+  if (!boardId) return;
+
+  try {
+    await publishBoardRecord({
+      boardId,
+      kind: 'score',
+      stats: buildAndroidValueString(),
+      deviceId: deviceInfoRef.current,
+      lat: locationGranted ? locationCoords?.lat ?? null : null,
+      lng: locationGranted ? locationCoords?.lng ?? null : null,
+    });
+  } catch {}
+}
 
   async function saveStatsToHistory() {
     if (!canSaveStats || saveInProgress) return;
@@ -926,8 +918,9 @@ const onUndo = () => {
 
   if (undoStack.current.length === 0) setHasLegStarted(false);
 };
-  useEffect(() => { void pushToFirebase(); }, [players, lastThrow, boardId, locationGranted, qrActivated, locationCoords]);
-
+useEffect(() => {
+  void pushToFirebase();
+}, [players, lastThrow, boardId, locationGranted, locationCoords]);
   useEffect(() => {
     if (boardNr == null) {
       lastLocalSendRef.current = 0;
@@ -1116,7 +1109,6 @@ const onUndo = () => {
   const replayCurrentMatch = () => {
     const replayDraft = buildDraftFromCurrent();
     setDraft(replayDraft);
-    setShowQuickMenu(false);
     setShowMenuDialog1(false);
     setShowMenuDialog2(false);
     startGameFromSetup(boardNr != null, boardNr, replayDraft);
@@ -1128,10 +1120,14 @@ const onUndo = () => {
     handledOpenNewGameKeyRef.current = openNewGameRequestKey;
     openMenu();
   }, [openNewGameRequestKey]);
-
+  useEffect(() => {
+    if (replayRequestKey == null) return;
+    if (handledReplayKeyRef.current === replayRequestKey) return;
+    handledReplayKeyRef.current = replayRequestKey;
+    replayCurrentMatch();
+  }, [replayRequestKey]);
   const openMenu = () => {
      ensureScoringFullscreen();
-    setShowQuickMenu(false);
     setDraft(buildDraftFromCurrent());
     setName1Touched(false);
     setName2Touched(false);
@@ -1453,7 +1449,7 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null, dra
   );
 
   return (
-    <View style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom', 'left', 'right']}>
       <View style={styles.screen}>
         {topHeader}
         <View style={styles.keyboardArea}>{keyboard}</View>
@@ -1467,35 +1463,10 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null, dra
         >
           <Text style={styles.cornerCheckText}>check</Text>
         </Pressable>
-        <Pressable
-            style={styles.cornerMenu}
-            onPress={() => {
-              blurActiveElement();
-              setShowQuickMenu((v) => !v);
-            }}
-          >
-          <Text style={styles.cornerText}>â˜°</Text>
-        </Pressable>
+        
       </View>
 
-      <Modal visible={showQuickMenu} transparent animationType="fade" onRequestClose={() => setShowQuickMenu(false)}>
-        <Pressable style={styles.quickMenuOverlay} onPress={() => setShowQuickMenu(false)}>
-          <View style={styles.quickMenuCard}>
-            <Pressable style={styles.quickMenuItem} onPress={() => { setShowQuickMenu(false); openMenu(); }}>
-              <Text style={styles.quickMenuItemText}>new 501</Text>
-            </Pressable>
-            <Pressable style={styles.quickMenuItem} onPress={() => { setShowQuickMenu(false); onOpenCricket?.(); }}>
-              <Text style={styles.quickMenuItemText}>new Cricket</Text>
-            </Pressable>
-            <Pressable style={styles.quickMenuItem} onPress={() => { setShowQuickMenu(false); onOpenDisplay?.(); }}>
-              <Text style={styles.quickMenuItemText}>Big Display</Text>
-            </Pressable>
-            <Pressable style={styles.quickMenuItem} onPress={replayCurrentMatch}>
-              <Text style={styles.quickMenuItemText}>re-play</Text>
-            </Pressable>
-          </View>
-        </Pressable>
-      </Modal>
+      
       <Modal
         visible={showBroadcastDialog}
         transparent
@@ -1549,7 +1520,7 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null, dra
         <View style={styles.modalCard}>
           <Text style={styles.modalTitle}>Location access</Text>
           <Text style={styles.modalLabel}>
-            To use the display function easily, please allow location access.
+            Allow location access if you want to appear on the big screen when using it inside the club.
           </Text>
 
           <View style={styles.modalBtns}>
@@ -2172,7 +2143,7 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null, dra
           </View>
         </View>
       </Modal>
-    </View>
+    </SafeAreaView>
   );
 }
 
