@@ -1,3 +1,6 @@
+import { MaterialIcons } from '@expo/vector-icons';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as Location from 'expo-location';
 import { onValue, ref } from 'firebase/database';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -5,6 +8,7 @@ import {
   Easing,
   Image,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -14,9 +18,18 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { db } from '../../lib/firebase';
-import { addWatchedId, buildBoardShareUrl, buildQrImageUrl, getOrCreateDeviceId, parseBoardIdFromText, publishBoardRecord } from './broadcastShared';
-
+import {
+  addWatchedId,
+  buildBoardShareUrl,
+  buildQrImageUrl,
+  getOrCreateBoardId,
+  getOrCreateDeviceId,
+  parseBoardIdFromText,
+  publishBoardRecord,
+  requestBrowserLikeLocation,
+} from './broadcastShared';
 type Props = {
   onExit: () => void;
   clubId: string;
@@ -77,19 +90,36 @@ const QUICK_BUTTONS: Array<'T 20' | 'T 19' | 'T 18' | 'T 17' | 'T 16' | 'T 15' |
 const FRESH_LIMIT_MS = 2 * 60 * 1000;
 const INACTIVITY_MS = 2 * 60 * 1000;
 const INACTIVITY_CHECK_MS = 2 * 60 * 1000;
+async function ensureDocFullscreen() {
+  if (typeof document === 'undefined') return false;
 
-function ensureDocFullscreen() {
-  if (typeof document === 'undefined') return Promise.resolve();
-  if (document.fullscreenElement) return Promise.resolve();
-  return document.documentElement.requestFullscreen?.() ?? Promise.resolve();
+  const alreadyFullscreen = !!document.fullscreenElement;
+  console.log('ensureDocFullscreen: before request, fullscreen =', alreadyFullscreen);
+
+  if (alreadyFullscreen) return true;
+
+  try {
+    await (document.documentElement.requestFullscreen?.() ?? Promise.resolve());
+    const after = !!document.fullscreenElement;
+    console.log('ensureDocFullscreen: after request, fullscreen =', after);
+    return after;
+  } catch (err) {
+    console.log('ensureDocFullscreen failed:', err);
+    return false;
+  }
 }
 
 function ensureKrikettFullscreen() {
   if (typeof document === 'undefined') return;
-  if (document.fullscreenElement) return;
-  void ensureDocFullscreen().catch(() => {});
-}
 
+  console.log('ensureKrikettFullscreen: fullscreenElement =', document.fullscreenElement);
+
+  if (document.fullscreenElement) return;
+
+  void ensureDocFullscreen().then((ok) => {
+    console.log('ensureKrikettFullscreen result =', ok);
+  });
+}
 function useDisplayWakeLock(enabled: boolean) {
   const sentinelRef = useRef<WakeLockSentinelLike | null>(null);
   const requestInFlightRef = useRef(false);
@@ -161,7 +191,25 @@ function useDisplayWakeLock(enabled: boolean) {
       requestInFlightRef.current = false;
     }
   }, [enabled]);
+useEffect(() => {
+  if (typeof document === 'undefined') return;
 
+  const onChange = () => {
+    console.log('fullscreenchange ->', !!document.fullscreenElement, document.fullscreenElement);
+  };
+
+  const onError = (e: Event) => {
+    console.log('fullscreenerror ->', e);
+  };
+
+  document.addEventListener('fullscreenchange', onChange);
+  document.addEventListener('fullscreenerror', onError);
+
+  return () => {
+    document.removeEventListener('fullscreenchange', onChange);
+    document.removeEventListener('fullscreenerror', onError);
+  };
+}, []);
   useEffect(() => {
     if (typeof document === 'undefined' || typeof window === 'undefined') {
       return;
@@ -292,31 +340,81 @@ function CricketMarkBox(props: {
   short?: boolean;
 }) {
   const marks = Math.max(0, Math.min(3, Number(props.marks) || 0));
-
+const vertical = !!props.short;
   return (
     <View
+  style={[
+    styles.cricketMarkChip,
+    props.compact ? styles.cricketMarkChipCompact : null,
+    props.short ? styles.cricketMarkChipShort : null,
+  ]}
+>
+  <View style={styles.cricketMarkChipBg}>
+    <View
       style={[
-        styles.cricketMarkChip,
-        props.compact ? styles.cricketMarkChipCompact : null,
-        props.short ? styles.cricketMarkChipShort : null,
+        styles.cricketMarkThirdBase,
+        vertical ? styles.cricketMarkThirdBaseVertical : null,
+        vertical ? styles.cricketMarkThird1Vertical : styles.cricketMarkThird1,
+        styles.cricketMarkThirdBaseLight,
       ]}
+    />
+    <View
+      style={[
+        styles.cricketMarkThirdBase,
+        vertical ? styles.cricketMarkThirdBaseVertical : null,
+        vertical ? styles.cricketMarkThird2Vertical : styles.cricketMarkThird2,
+        styles.cricketMarkThirdBaseMid,
+      ]}
+    />
+    <View
+      style={[
+        styles.cricketMarkThirdBase,
+        vertical ? styles.cricketMarkThirdBaseVertical : null,
+        vertical ? styles.cricketMarkThird3Vertical : styles.cricketMarkThird3,
+        styles.cricketMarkThirdBaseDark,
+      ]}
+    />
+
+    {marks >= 1 ? (
+      <View
+        style={[
+          vertical ? styles.cricketMarkThirdFillVertical : styles.cricketMarkThirdFill,
+          vertical ? styles.cricketMarkThird1Vertical : styles.cricketMarkThird1,
+        ]}
+      />
+    ) : null}
+
+    {marks >= 2 ? (
+      <View
+        style={[
+          vertical ? styles.cricketMarkThirdFillVerticalMid : styles.cricketMarkThirdFillMid,
+          vertical ? styles.cricketMarkThird2Vertical : styles.cricketMarkThird2,
+        ]}
+      />
+    ) : null}
+
+    {marks >= 3 ? (
+      <View
+        style={[
+          vertical ? styles.cricketMarkThirdFillVertical : styles.cricketMarkThirdFill,
+          vertical ? styles.cricketMarkThird3Vertical : styles.cricketMarkThird3,
+        ]}
+      />
+    ) : null}
+  </View>
+
+  {!props.hideLabel ? (
+    <Text
+      style={[
+        styles.cricketMarkChipLabel,
+        vertical ? styles.cricketMarkChipLabelVertical : null,
+      ]}
+      numberOfLines={1}
     >
-      <View style={styles.cricketMarkChipBg}>
-        <View style={[styles.cricketMarkThirdBase, styles.cricketMarkThird1, styles.cricketMarkThirdBaseLight]} />
-        <View style={[styles.cricketMarkThirdBase, styles.cricketMarkThird2, styles.cricketMarkThirdBaseMid]} />
-        <View style={[styles.cricketMarkThirdBase, styles.cricketMarkThird3, styles.cricketMarkThirdBaseDark]} />
-
-        {marks >= 1 ? <View style={[styles.cricketMarkThirdFill, styles.cricketMarkThird1]} /> : null}
-        {marks >= 2 ? <View style={[styles.cricketMarkThirdFillMid, styles.cricketMarkThird2]} /> : null}
-        {marks >= 3 ? <View style={[styles.cricketMarkThirdFill, styles.cricketMarkThird3]} /> : null}
-      </View>
-
-      {!props.hideLabel ? (
-        <Text style={styles.cricketMarkChipLabel} numberOfLines={1}>
-          {props.label}
-        </Text>
-      ) : null}
-    </View>
+      {props.label}
+    </Text>
+  ) : null}
+</View>
   );
 }
 function tokenCapacity(sector: CricketSector) {
@@ -543,6 +641,7 @@ function buildCricketValueString(players: PlayerState[], round: number, deviceIn
 
 export default function KrikettScreen({ onExit, clubId, initialBoardNr, onOpenScoring, onOpenDisplay, onOpenDisplayById, openNewGameRequestKey, replayRequestKey }: Props) {  useDisplayWakeLock(true);
   const { width, height } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const isPortrait = height >= width;
   const initialVirtualPrefs = useMemo(() => loadVirtualPrefs(), []);
 
@@ -576,7 +675,10 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr, onOpenSc
     vsVirtual: initialVirtualPrefs.enabled,
     virtualLevel: initialVirtualPrefs.level,
   });
-  
+  const [showLocationPermissionDialog, setShowLocationPermissionDialog] = useState(false);
+const [showScannerScreen, setShowScannerScreen] = useState(false);
+const [hasScannedQr, setHasScannedQr] = useState(false);
+const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [nameTouched, setNameTouched] = useState<boolean[]>([false, false, false, false]);
   const [menuBoardTmp, setMenuBoardTmp] = useState<number | null>(initialBoardNr ?? null);
   const [warnedBusyBoard, setWarnedBusyBoard] = useState<number | null>(null);
@@ -618,28 +720,118 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr, onOpenSc
     setWarnedBusyBoard(null);
     setShowInactiveDialog(true);
   };
+const openBoardFromScannedText = useCallback((raw: string) => {
+  const parsed = parseBoardIdFromText(raw);
+  if (!parsed) return false;
 
-  const pushToFirebase = useCallback(async (nextPlayers: PlayerState[], nextRound: number, nextBoardNr: number | null) => {
-    if (!boardId) return;
-    if (!locationGranted && !qrActivated) return;
-    try {
-      await publishBoardRecord({
-        boardId,
-        kind: 'cricket',
-        stats: buildCricketValueString(nextPlayers, nextRound, deviceInfoRef.current),
-        deviceId: deviceInfoRef.current,
-        lat: locationGranted ? locationCoords?.lat ?? null : null,
-        lng: locationGranted ? locationCoords?.lng ?? null : null,
+  addWatchedId(parsed);
+  setShowScannerScreen(false);
+  setShowScanDialog(false);
+  setShowBroadcastDialog(false);
+  setScanInput('');
+  setHasScannedQr(false);
+  onOpenDisplayById?.(parsed);
+  return true;
+}, [onOpenDisplayById]);
+const requestAppLocation = useCallback(async () => {
+  try {
+    if (Platform.OS === 'web') {
+      const coords = await requestBrowserLikeLocation();
+      if (coords) {
+        setLocationCoords(coords);
+        setLocationGranted(true);
+        return true;
+      }
+      setLocationCoords(null);
+      setLocationGranted(false);
+      return false;
+    }
+
+    const current = await Location.getForegroundPermissionsAsync();
+    let granted = current.status === 'granted';
+
+    if (!granted) {
+      const asked = await Location.requestForegroundPermissionsAsync();
+      granted = asked.status === 'granted';
+    }
+
+    if (!granted) {
+      setLocationCoords(null);
+      setLocationGranted(false);
+      return false;
+    }
+
+    const lastKnown = await Location.getLastKnownPositionAsync();
+    if (lastKnown?.coords) {
+      setLocationCoords({
+        lat: lastKnown.coords.latitude,
+        lng: lastKnown.coords.longitude,
       });
-    } catch {}
-  }, [boardId, locationGranted, qrActivated, locationCoords]);
+      setLocationGranted(true);
+      return true;
+    }
+
+    const currentPos = await Location.getCurrentPositionAsync({
+      accuracy: Location.Accuracy.Balanced,
+    });
+
+    setLocationCoords({
+      lat: currentPos.coords.latitude,
+      lng: currentPos.coords.longitude,
+    });
+    setLocationGranted(true);
+    return true;
+  } catch {
+    setLocationCoords(null);
+    setLocationGranted(false);
+    return false;
+  }
+}, []);
+
+const pushToFirebase = useCallback(async () => {
+  if (!boardId) return;
+
+  try {
+    await publishBoardRecord({
+      boardId,
+      kind: 'cricket',
+      stats: buildCricketValueString(players, round, deviceInfoRef.current),
+      deviceId: deviceInfoRef.current,
+      lat: locationGranted ? locationCoords?.lat ?? null : null,
+      lng: locationGranted ? locationCoords?.lng ?? null : null,
+    });
+  } catch {}
+}, [boardId, players, round, locationGranted, locationCoords]);
+ useEffect(() => {
+  void pushToFirebase();
+}, [players, active, round, boardId, locationGranted, locationCoords, pushToFirebase]);
+  useEffect(() => {
+  void getOrCreateBoardId(deviceInfoRef.current).then(setBoardId);
+
+  if (Platform.OS === 'web') {
+    void requestAppLocation();
+    return;
+  }
+
+  void Location.getForegroundPermissionsAsync()
+    .then(async (perm) => {
+      if (perm.status !== 'granted') {
+        setLocationCoords(null);
+        setLocationGranted(false);
+        return;
+      }
+      await requestAppLocation();
+    })
+    .catch(() => {
+      setLocationCoords(null);
+      setLocationGranted(false);
+    });
+}, [requestAppLocation]);
+
   useEffect(() => {
     playersRef.current = players;
   }, [players]);
-  useEffect(() => {
-    void pushToFirebase(players, round, boardNr);
-  }, [players, round, boardId, locationGranted, qrActivated, locationCoords, pushToFirebase]);
-
+  
   useEffect(() => {
     if (boardNr == null) {
       lastLocalSendRef.current = 0;
@@ -906,7 +1098,7 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr, onOpenSc
   setPendingWinnerIdx(null);
 
   // Undo utÃ¡n rÃ¶gtÃ¶n menjen fel a visszaÃ¡llÃ­tott Ã¡llapot Firebase-be is.
-  void pushToFirebase(restoredPlayers, prev.round, prev.boardNr);
+  void pushToFirebase();
 };
 
   const addHumanPlayer = () => {
@@ -1039,30 +1231,40 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr, onOpenSc
       startGame(pendingStartVariant, true, n);
     }
   };
-
-  const renderBroadcastIcon = () => {
-    const src = require('./broadcast.png');
-    const isActive = !!boardId && (locationGranted || qrActivated);
-    return (
-      <View style={styles.broadcastOuter} pointerEvents="none">
-        <View style={[styles.broadcastCircle, isActive ? styles.broadcastCircleOn : styles.broadcastCircleOff]}>
+const renderBroadcastIcon = () => {
+  const isActive = !!boardId && (locationGranted || qrActivated);
+const src = require('./broadcast.png');
+  return (
+    <View style={styles.broadcastOuter} pointerEvents="none">
+      <View style={[styles.broadcastCircle, isActive ? styles.broadcastCircleOn : styles.broadcastCircleOff]}>
+        <View >
           <Image source={src} style={styles.broadcastIconInside} />
         </View>
-        {isActive ? (
-          <View style={styles.broadcastBadge}>
-            <Text style={styles.broadcastBadgeText}>QR</Text>
-          </View>
-        ) : null}
       </View>
-    );
-  };
+      {/* {isActive ? (
+        <View style={styles.broadcastBadge}>
+          <Text style={styles.broadcastBadgeText}>QR</Text>
+        </View>
+      ) : null} */}
+    </View>
+  );
+};
   const keyHitSlop = { top: 10, bottom: 10, left: 10, right: 10 } as const;
   return (
-    <View style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <View style={styles.screen}>
         <View style={styles.topSpacer} />
 
-        <Pressable style={styles.floatingBoardBadgeBtn} onPress={() => { if (boardId) { setQrActivated(true); setShowBroadcastDialog(true); void pushToFirebase(playersRef.current, round, null); } }}>
+        <Pressable
+          style={styles.floatingBoardBadgeBtn}
+          onPress={() => {
+            if (boardId) {
+              setQrActivated(true);
+              setShowBroadcastDialog(true);
+              void pushToFirebase();
+            }
+          }}
+        >
           {renderBroadcastIcon()}
         </Pressable>
 
@@ -1082,33 +1284,56 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr, onOpenSc
         <View style={styles.tableWrap}>
           {players.map((player, idx) => (
             <View key={player.id} style={[styles.tableRow, idx === active ? styles.tableRowActive : null]}>
-              <View style={[styles.cellBase, styles.playerCell, styles.playerCellRow]}>
-              <Text
-                style={[styles.playerNameText, idx === active ? styles.playerNameActive : null]}
-                numberOfLines={1}
-              >
-                {player.name}
-              </Text>
+              {!isPortrait ? (
+              <View style = {styles.rowNames}>
+                  <View style={[styles.cellBase, styles.playerCell, styles.playerCellRow]}>
+                    <Text
+                      style={[styles.playerNameText, idx === active ? styles.playerNameActive : null]}
+                      numberOfLines={1}
+                    >
+                      {player.name}
+                    </Text>
 
-              <Text style={styles.playerWinsText} numberOfLines={1}>
-                {player.wins}
-              </Text>
-            </View>
-              <View style={[styles.cellBase, styles.pointsCell]}>
-                <Text style={styles.pointsText}>{player.points}</Text>
+                    <Text style={styles.playerWinsText} numberOfLines={1}>
+                      {player.wins}
+                    </Text>
+                  </View>
+                  <View style={[styles.cellBase, styles.pointsCell]}>
+                    <Text style={styles.pointsText}>{player.points}</Text>
+                  </View>
+                </View>
+              ) : (
+              <View style={[styles.cellBase, styles.playerCellPortrait]}>
+                <View style={[styles.rowNamesPortrait]}>
+                <Text style={[styles.playerNameText, idx === active ? styles.playerNameActive : null]} numberOfLines={1}>
+                  {player.name}
+                </Text>
+                <Text style={styles.pointsTextPortrait} numberOfLines={1}>
+                  {player.points}
+                </Text>
+                
+                </View>
+                <Text style={[styles.playerWinsText]} numberOfLines={1}>
+                   {player.wins}
+                </Text>
               </View>
-
+              )}
               {SECTORS.map((sector) => (
                 <View key={`${player.id}-${String(sector)}`} style={[styles.cellBase, styles.markCell, styles.markCellBoxWrap]}>
                   <CricketMarkBox
                     label={sector === 'B' ? 'B.' : String(sector)}
                     marks={player.marks[sector]}
                     compact
-                    hideLabel={isPortrait}
                     short={isPortrait}
                   />
                 </View>
               ))}
+              <View >
+               
+                <Text style={styles.pointsTextPortrait} numberOfLines={1}>
+                  {' '}
+                </Text>
+              </View>
             </View>
           ))}
         </View>
@@ -1288,7 +1513,7 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr, onOpenSc
         <View style={styles.modalOverlay}>
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowSetupDialog(false)} />
           <View style={styles.modalCardWide}>
-            <Text style={styles.modalTitle}>New cricket game</Text>
+            <Text style={styles.modalTitle}>New cricket</Text>
 
             {draft.humanNames.map((name, idx) => (
               <View key={`human-${idx}`} style={[styles.setupFieldWrap, idx > 0 ? { marginTop: 10 } : null]}>
@@ -1339,14 +1564,14 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr, onOpenSc
 
             <View style={styles.modalBtns}>
               <Pressable style={[styles.modalBtn, styles.modalBtnGhost]} onPress={() => requestStart('penalty')}>
-                <Text style={styles.modalBtnTextGhost}>Start penalty</Text>
+                <Text style={styles.modalBtnTextGhost}>Cut Throat Cricket</Text>
               </Pressable>
               <Pressable style={[styles.modalBtn, styles.modalBtnOk]} onPress={() => requestStart('own')}>
-                <Text style={styles.modalBtnTextOk}>Start own score</Text>
+                <Text style={styles.modalBtnTextOk}>Cricket</Text>
               </Pressable>
             </View>
 
-            <Pressable onPress={onExit} hitSlop={8} style={styles.exitInline}><Text style={styles.exitInlineText}>Exit cricket mode</Text></Pressable>
+            {/* <Pressable onPress={onExit} hitSlop={8} style={styles.exitInline}><Text style={styles.exitInlineText}>Exit cricket mode</Text></Pressable> */}
           </View>
         </View>
       </Modal>
@@ -1420,30 +1645,213 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr, onOpenSc
         </Pressable>
       </Modal>
 
-      <Modal visible={showBroadcastDialog} transparent animationType="fade" onRequestClose={() => setShowBroadcastDialog(false)}>
-        <View style={styles.modalOverlay}><View style={styles.modalCard}>
-          <Text style={styles.modalTitle}>Broadcast</Text>
-          <Text style={styles.modalLabel}>{locationGranted ? 'Nearby devices can see this cricket match.' : 'Location not available. QR/direct access only.'}</Text>
-          {boardId ? <Image source={{ uri: buildQrImageUrl(buildBoardShareUrl(boardId)) }} style={styles.qrPreview} /> : null}
-          <Text selectable style={styles.modalHintSmall}>{boardId ? buildBoardShareUrl(boardId) : 'Generating...'}</Text>
-          <View style={styles.modalBtns}>
-            <Pressable style={[styles.modalBtn, styles.modalBtnGhost]} onPress={() => setShowBroadcastDialog(false)}><Text style={styles.modalBtnTextGhost}>Close</Text></Pressable>
-            <Pressable style={[styles.modalBtn, styles.modalBtnOk]} onPress={() => { setShowBroadcastDialog(false); setShowScanDialog(true); }}><Text style={styles.modalBtnTextOk}>Scan</Text></Pressable>
-          </View>
-        </View></View>
-      </Modal>
+      <Modal
+        visible={showBroadcastDialog}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowBroadcastDialog(false)}
+      >
+        <Pressable style={styles.modalOverlay} onPress={() => setShowBroadcastDialog(false)}>
+          <Pressable style={styles.modalCard} onPress={() => {}}>
+            <Pressable
+              style={styles.modalCloseBtn}
+              onPress={() => setShowBroadcastDialog(false)}
+              hitSlop={10}
+            >
+              <Text style={styles.modalCloseBtnText}>×</Text>
+            </Pressable>
 
-      <Modal visible={showScanDialog} transparent animationType="fade" onRequestClose={() => setShowScanDialog(false)}>
-        <View style={styles.modalOverlay}><View style={styles.modalCard}>
-          <Text style={styles.modalTitle}>Open board display</Text>
-          <TextInput value={scanInput} onChangeText={setScanInput} style={styles.modalInput} placeholder="Paste QR url or board id" placeholderTextColor="rgba(0,0,0,0.45)" />
-          <View style={styles.modalBtns}>
-            <Pressable style={[styles.modalBtn, styles.modalBtnGhost]} onPress={() => setShowScanDialog(false)}><Text style={styles.modalBtnTextGhost}>Cancel</Text></Pressable>
-            <Pressable style={[styles.modalBtn, styles.modalBtnOk]} onPress={() => { const parsed = parseBoardIdFromText(scanInput); if (parsed) { addWatchedId(parsed); setShowScanDialog(false); setScanInput(''); onOpenDisplayById?.(parsed); } }}><Text style={styles.modalBtnTextOk}>Open</Text></Pressable>
-          </View>
-        </View></View>
-      </Modal>
+            <Text style={styles.modalLabel}>
+              Scan this with another device for display.
+            </Text>
 
+            {boardId ? (
+              <Image
+                source={{ uri: buildQrImageUrl(buildBoardShareUrl(boardId)) }}
+                style={styles.qrPreviewLarge}
+              />
+            ) : null}
+
+            <Text selectable style={styles.modalHintSmall}>
+              {boardId ? buildBoardShareUrl(boardId) : 'Generating...'}
+            </Text>
+
+            <Text style={styles.orLabel}>OR</Text>
+
+            <View style={styles.modalBtnsSingle}>
+              <Pressable
+                style={styles.scanScoreboardBtn}
+                onPress={async () => {
+                  const granted = cameraPermission?.granted || (await requestCameraPermission())?.granted;
+                  if (!granted) return;
+                  setShowBroadcastDialog(false);
+                  setShowScannerScreen(true);
+                  setHasScannedQr(false);
+                }}
+              >
+                <MaterialIcons name="qr-code-scanner" size={22} color="rgba(0,0,0,0.78)" />
+                <Text style={styles.scanScoreboardBtnText}>Scan another device&apos;s scoreboard</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+      <Modal
+        visible={showLocationPermissionDialog}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowLocationPermissionDialog(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Location access</Text>
+            <Text style={styles.modalLabel}>
+              Allow location access if you want to appear on the big screen when using it inside the club.
+            </Text>
+
+            <View style={styles.modalBtns}>
+              <Pressable
+                style={[styles.modalBtn, styles.modalBtnGhost]}
+                onPress={() => setShowLocationPermissionDialog(false)}
+              >
+                <Text style={styles.modalBtnTextGhost}>Not now</Text>
+              </Pressable>
+
+              <Pressable
+                style={[styles.modalBtn, styles.modalBtnOk]}
+                onPress={async () => {
+                  const ok = await requestAppLocation();
+                  setShowLocationPermissionDialog(false);
+                  if (ok) {
+                    setQrActivated(true);
+                    setShowBroadcastDialog(true);
+                  }
+                }}
+              >
+                <Text style={styles.modalBtnTextOk}>Continue</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+      <Modal
+  visible={showScanDialog}
+  transparent
+  animationType="fade"
+  onRequestClose={() => setShowScanDialog(false)}
+>
+  <Pressable style={styles.modalOverlay} onPress={() => setShowScanDialog(false)}>
+    <Pressable style={styles.modalCard} onPress={() => {}}>
+      <Text style={styles.modalTitle}>Open board display</Text>
+      <Text style={styles.modalLabel}>
+        Paste a QR URL or board ID manually.
+      </Text>
+
+      <TextInput
+        value={scanInput}
+        onChangeText={setScanInput}
+        style={styles.modalInput}
+        placeholder="Paste QR url or board id"
+        placeholderTextColor="rgba(0,0,0,0.45)"
+        autoCapitalize="characters"
+        autoCorrect={false}
+      />
+
+      <View style={styles.modalBtnsSingle}>
+        <Pressable
+          style={[styles.modalBtn, styles.modalBtnOk]}
+          onPress={() => {
+            openBoardFromScannedText(scanInput);
+          }}
+        >
+          <Text style={styles.modalBtnTextOk}>Open manually</Text>
+        </Pressable>
+      </View>
+    </Pressable>
+  </Pressable>
+</Modal>
+<Modal
+  visible={showScannerScreen}
+  animationType="slide"
+  onRequestClose={() => {
+    setShowScannerScreen(false);
+    setHasScannedQr(false);
+  }}
+>
+  <View style={styles.scannerScreen}>
+    {cameraPermission?.granted ? (
+      <CameraView
+        style={styles.scannerCamera}
+        barcodeScannerSettings={{
+          barcodeTypes: ['qr'],
+        }}
+        onBarcodeScanned={
+          hasScannedQr
+            ? undefined
+            : ({ data }) => {
+                setHasScannedQr(true);
+                const ok = openBoardFromScannedText(String(data || ''));
+                if (!ok) {
+                  setShowScannerScreen(false);
+                  setShowScanDialog(true);
+                  setScanInput(String(data || ''));
+                  setHasScannedQr(false);
+                }
+              }
+        }
+      />
+    ) : (
+      <View style={styles.scannerFallback}>
+        <Text style={styles.modalTitle}>Camera permission needed</Text>
+        <Text style={styles.modalLabel}>
+          Please allow camera access to scan a QR code.
+        </Text>
+        <View style={styles.modalBtnsSingle}>
+          <Pressable
+            style={[styles.modalBtn, styles.modalBtnOk]}
+            onPress={async () => {
+              await requestCameraPermission();
+            }}
+          >
+            <Text style={styles.modalBtnTextOk}>Allow camera</Text>
+          </Pressable>
+        </View>
+      </View>
+    )}
+
+    <View style={styles.scannerHud}>
+      <Text style={styles.scannerTitle}>Scan another device</Text>
+      <Text style={styles.scannerHint}>
+        Point the camera at the QR code shown on the other device.
+      </Text>
+
+      <View style={styles.scannerFrame} />
+
+      <View style={styles.scannerBottomActions}>
+        <Pressable
+          style={[styles.modalBtn, styles.modalBtnGhost, styles.scannerBottomBtn]}
+          onPress={() => {
+            setShowScannerScreen(false);
+            setHasScannedQr(false);
+            setShowScanDialog(true);
+          }}
+        >
+          <Text style={styles.modalBtnTextGhost}>Enter manually</Text>
+        </Pressable>
+
+        <Pressable
+          style={[styles.modalBtn, styles.modalBtnOk, styles.scannerBottomBtn]}
+          onPress={() => {
+            setShowScannerScreen(false);
+            setHasScannedQr(false);
+          }}
+        >
+          <Text style={styles.modalBtnTextOk}>Close</Text>
+        </Pressable>
+      </View>
+    </View>
+  </View>
+</Modal>
       <Modal visible={showWinnerDialog} transparent animationType="fade" onRequestClose={() => setShowWinnerDialog(false)}>
         <View style={styles.modalOverlay}><View style={styles.modalCard}>
           <Text style={styles.modalTitle}>Winner</Text>
@@ -1472,14 +1880,14 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr, onOpenSc
                 <Pressable style={[styles.modalBtn, styles.modalBtnOk, { marginTop: 12 }]} onPress={() => setShowInactiveDialog(false)}><Text style={styles.modalBtnTextOk}>OK</Text></Pressable>
               </View></View>
             </Modal>
-    </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#ffffff' },
-  screen: { flex: 1, backgroundColor: '#ffffff', padding: 8 },
-  topSpacer: { height: 10 },
+ screen: { flex: 1, backgroundColor: '#ffffff' },
+topSpacer: { height: 0 },
 
   floatingBoardBadgeBtn: {
   position: 'absolute',
@@ -1488,19 +1896,205 @@ const styles = StyleSheet.create({
   zIndex: 2000,
   elevation: 8,
 },
+cricketMarkChipShort: {
+  width: 28,
+  minWidth: 28,
+  height: 50,
+  paddingVertical: 4,
+  paddingHorizontal: 3,
+  borderRadius: 6,
+},
+playerCellPortrait: {
+  flex: 2.31,
+  minWidth: 64,
+  alignItems: 'flex-start',
+  justifyContent: 'space-between',
+},
 
+winsCellPortrait: {
+  minWidth: 22,
+  alignItems: 'center',
+  justifyContent: 'center',
+},
+
+pointsTextPortrait: {
+  marginTop: 0,
+  minWidth: 32,
+  fontSize: 18,
+  fontWeight: '800',
+  color: '#b38f00',
+  textAlign: 'left',
+},
+
+playerWinsTextPortrait: {
+  fontSize: 16,
+  fontWeight: '800',
+  color: 'rgba(61,255,47,0.42)',
+  textAlign: 'center',
+},
+cricketMarkThirdBaseVertical: {
+  left: 0,
+  right: 0,
+  width: '100%',
+},
+
+cricketMarkThird1Vertical: {
+  top: 0,
+  height: '33.3333%',
+},
+
+cricketMarkThird2Vertical: {
+  top: '33.3333%',
+  height: '33.3333%',
+},
+
+cricketMarkThird3Vertical: {
+  top: '66.6666%',
+  height: '33.3333%',
+},
+
+cricketMarkThirdFillVertical: {
+  position: 'absolute',
+  left: 0,
+  right: 0,
+  backgroundColor: 'rgba(61,255,47,0.42)',
+},
+
+cricketMarkThirdFillVerticalMid: {
+  position: 'absolute',
+  left: 0,
+  right: 0,
+  backgroundColor: 'rgba(61,255,47,0.32)',
+},
+
+cricketMarkChipLabelVertical: {
+  fontSize: 16,
+  lineHeight: 16,
+},
+modalCloseBtn: {
+  position: 'absolute',
+  right: 10,
+  top: 10,
+  width: 34,
+  height: 34,
+  borderRadius: 999,
+  alignItems: 'center',
+  justifyContent: 'center',
+  backgroundColor: 'rgba(0,0,0,0.06)',
+  zIndex: 5,
+},
+qrPreviewLarge: {
+  width: 260,
+  height: 260,
+  alignSelf: 'center',
+  backgroundColor: '#fff',
+  padding: 14,
+  borderRadius: 16,
+  marginTop: 10,
+},
+modalCloseBtnText: {
+  fontSize: 24,
+  lineHeight: 24,
+  fontWeight: '900',
+  color: 'rgba(0,0,0,0.7)',
+},
+
+scanScoreboardBtn: {
+  minHeight: 52,
+  borderRadius: 12,
+  borderWidth: 1.5,
+  borderColor: 'rgba(0,0,0,0.22)',
+  backgroundColor: '#ffffff',
+  paddingHorizontal: 14,
+  paddingVertical: 12,
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 10,
+},
+
+scanScoreboardBtnText: {
+  color: 'rgba(0,0,0,0.82)',
+  fontWeight: '900',
+  textAlign: 'center',
+},
+orLabel: {
+  marginTop: 14,
+  textAlign: 'center',
+  fontWeight: '900',
+  color: 'rgba(0,0,0,0.48)',
+  letterSpacing: 1,
+},
+
+modalBtnsSingle: {
+  marginTop: 12,
+},
+
+scannerScreen: {
+  flex: 1,
+  backgroundColor: '#000',
+},
+
+scannerCamera: {
+  ...StyleSheet.absoluteFillObject,
+},
+
+scannerHud: {
+  flex: 1,
+  justifyContent: 'space-between',
+  paddingTop: 70,
+  paddingBottom: 34,
+  paddingHorizontal: 24,
+  backgroundColor: 'rgba(0,0,0,0.18)',
+},
+
+scannerTitle: {
+  textAlign: 'center',
+  color: '#fff',
+  fontSize: 24,
+  fontWeight: '900',
+},
+
+scannerHint: {
+  marginTop: 10,
+  textAlign: 'center',
+  color: 'rgba(255,255,255,0.88)',
+  fontSize: 15,
+  fontWeight: '700',
+},
+
+scannerFrame: {
+  alignSelf: 'center',
+  width: 250,
+  height: 250,
+  borderRadius: 24,
+  borderWidth: 3,
+  borderColor: '#3DFF2F',
+  backgroundColor: 'transparent',
+},
+
+scannerBottomActions: {
+  flexDirection: 'row',
+  gap: 10,
+},
+
+scannerBottomBtn: {
+  flex: 1,
+},
+
+scannerFallback: {
+  flex: 1,
+  justifyContent: 'center',
+  paddingHorizontal: 24,
+  backgroundColor: '#fff',
+},
 broadcastOuter: {
-  width: 56,
-  height: 56,
   position: 'relative',
   alignItems: 'center',
   justifyContent: 'center',
 },
 
 broadcastCircle: {
-  width: 56,
-  height: 56,
-  borderRadius: 999,
   alignItems: 'center',
   justifyContent: 'center',
   borderWidth: 2,
@@ -1513,7 +2107,7 @@ broadcastCircleOff: {
 },
 
 broadcastCircleOn: {
-  backgroundColor: '#d7ebcf',
+  backgroundColor: '#ffffff',
 },
 
 broadcastIconInside: {
@@ -1577,6 +2171,17 @@ tableHeaderRow: {
   display: 'none',
 },
 
+rowNames: {
+  flexDirection: 'row',
+  justifyContent: 'space-between',
+  width: '20%',
+},
+rowNamesPortrait: {
+  flexDirection: 'row',
+  justifyContent: 'space-between',
+  width: '100%',
+},
+
 tableRow: {
   flexDirection: 'row',
   alignItems: 'center',
@@ -1594,12 +2199,6 @@ tableRowActive: {
   // borderBottomColor: '#b38f00',
 },
 
-cricketMarkChipShort: {
-  paddingVertical: 10,
-  paddingHorizontal: 12,
-  minWidth: 34,
-  minHeight: 14,
-},
 
 
 cricketMarkThirdBase: {
@@ -1638,15 +2237,15 @@ cricketMarkThirdFillMid: {
 },
 
 cricketMarkThirdBaseLight: {
-  backgroundColor: 'rgba(255,255,255,0.11)',
+  backgroundColor: 'rgba(255, 255, 255, 0.11)',
 },
+
 
 cricketMarkThirdBaseMid: {
   backgroundColor: 'rgba(255,255,255,0.05)',
 },
-
 cricketMarkThirdBaseDark: {
-  backgroundColor: 'rgba(255,255,255,0.11)',
+  backgroundColor: 'rgba(255, 255, 255, 0.11)',
 },
 cellBase: {
   
@@ -1654,10 +2253,11 @@ cellBase: {
   paddingVertical: 2,
   paddingHorizontal: 4,
 },
+
 playerCell: {
   
   
-  flex: 1.1,
+  flex: 1.8,
 },
 
 playerCellRow: {
@@ -1677,11 +2277,11 @@ playerNameText: {
 },
 
 playerWinsText: {
-  marginLeft: 8,
+  marginLeft: 4,
   fontSize: 16,
   fontWeight: '800',
   color: 'rgba(61,255,47,0.42)',
-  textAlign: 'right',
+  textAlign: 'left',
   flexShrink: 0,
 },
 
@@ -1719,7 +2319,7 @@ markText: {
 cricketMarkChip: {
   borderRadius: 8,
   borderWidth: 1,
-  borderColor: 'rgba(255,255,255,0.16)',
+  borderColor: 'rgba(26, 25, 25, 0.53)',
   backgroundColor: 'rgba(68, 65, 65, 0.97)',
   overflow: 'hidden',
   justifyContent: 'center',
@@ -1732,7 +2332,7 @@ cricketMarkChip: {
 },
 cricketMarkChipCompact: {
   paddingVertical: 8,
-  paddingHorizontal: 24,
+  paddingHorizontal: 12,
   minWidth: 55,
   borderRadius: 6,
 },
@@ -1824,7 +2424,8 @@ cricketMarkChipLabel: {
   modalCard: { width: '92%', maxWidth: 380, backgroundColor: '#fff', borderRadius: 14, padding: 14 },
   modalCardWide: { width: '92%', maxWidth: 420, backgroundColor: '#fff', borderRadius: 14, padding: 14 },
   modalTitle: { fontWeight: '900', fontSize: 18, marginBottom: 10, color: 'rgba(0,0,0,0.85)' },
-  modalLabel: { fontWeight: '800', color: 'rgba(0,0,0,0.6)', marginTop: 6, marginBottom: 4 },
+  modalLabel: { fontWeight: '800', 
+  textAlign: 'center',color: 'rgba(0,0,0,0.6)', marginTop: 6, marginBottom: 4 },
   modalInput: { borderWidth: 1, borderColor: 'rgba(0,0,0,0.2)', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, fontWeight: '800', color: 'rgba(0,0,0,0.85)' },
   modalInputLike: { borderWidth: 1, borderColor: 'rgba(0,0,0,0.2)', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 11, justifyContent: 'center', backgroundColor: '#fff' },
   modalInputLikeText: { fontWeight: '900', color: 'rgba(0,0,0,0.82)' },
@@ -1855,6 +2456,7 @@ cricketMarkChipLabel: {
   boardPickTextOff: { color: 'rgba(0,0,0,0.6)' },
   boardPickTextOn: { color: '#2f6f18' },
   boardPickTextDim: { color: 'rgba(0,0,0,0.45)' },
-  modalHintSmall: { marginTop: 10, color: 'rgba(63,63,63,0.45)', fontWeight: '800', fontSize: 12 },
+  modalHintSmall: { marginTop: 10, 
+  textAlign: 'center',color: 'rgba(63,63,63,0.45)', fontWeight: '800', fontSize: 12 },
   busyWarningText: { marginTop: 10, fontWeight: '900', color: '#b3422a' },
 });

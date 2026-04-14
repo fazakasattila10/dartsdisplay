@@ -11,6 +11,8 @@ import {
   useWindowDimensions
 } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import { runOnJS } from "react-native-reanimated";
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { db } from "../../lib/firebase";
 import HistoryScreen from "./HistoryScreen";
 import KrikettScreen from "./KrikettScreen";
@@ -399,7 +401,7 @@ function BoardCard(props: {
       ]}
     >
       <View style={styles.cardHeader}>
-        {props.onSaveHistory ? (
+        {/* {props.onSaveHistory ? (
           <Pressable
             onPress={() => {
               props.onUiAction();
@@ -419,8 +421,12 @@ function BoardCard(props: {
               {props.boardNr > 0 ? props.boardNr : ''}
             </Text>
           </View>
-        )}
-
+        )} */}
+        <View>
+            <Text> 
+              ""
+            </Text>
+          </View>
         <Pressable
           onPress={() => {
             props.onUiAction();
@@ -561,6 +567,7 @@ function StatRow(props: { left: string; label: string; right: string; fontZoom: 
 }
 
 export default function HomeScreen() {
+  const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const isPortrait = height >= width;
   const [mode, setMode] = useState<"display" | "scoring" | "cricket" | "history">(() => {
@@ -576,6 +583,7 @@ export default function HomeScreen() {
   const [allBoards, setAllBoards] = useState<Record<string, { id: string; raw: string; data: BoardData; lat: number | null; lng: number | null; deviceId: string | null; timestamp: number }>>({});
   const [fontZoom, setFontZoom] = useState(1);
   const [showHud, setShowHud] = useState(true);
+  const [displayLayout, setDisplayLayout] = useState<'grid' | 'list'>('grid');
   const [showFontSlider, setShowFontSlider] = useState(false);
   const wakeLock = useDisplayWakeLock(mode === 'display');
   const [showGameMenu, setShowGameMenu] = useState(false);
@@ -627,10 +635,19 @@ export default function HomeScreen() {
       })
       .sort((a: any, b: any) => (b.timestamp || 0) - (a.timestamp || 0));
   }, [allBoards, watchedIds, locationCoords]);
-
+const toggleHud = useCallback(() => {
+  setShowHud((v) => !v);
+}, []);
   useEffect(() => {
     if (fullscreenBoardId) addWatchedId(fullscreenBoardId);
   }, [fullscreenBoardId]);
+  const displayTapGesture = useMemo(
+  () =>
+    Gesture.Tap().onEnd(() => {
+      runOnJS(toggleHud)();
+    }),
+  [toggleHud]
+);
   const displayPinchGesture = useMemo(
   () =>
     Gesture.Pinch()
@@ -647,6 +664,11 @@ export default function HomeScreen() {
       }),
   [fontZoom]
 );
+const displayGesture = useMemo(
+  () => Gesture.Simultaneous(displayPinchGesture, displayTapGesture),
+  [displayPinchGesture, displayTapGesture]
+);
+
   const replayCurrentGame = useCallback(() => {
   setShowGameMenu(false);
 
@@ -674,38 +696,65 @@ const openCricketNewGame = useCallback(() => {
   setMode('cricket');
   setCricketOpenNewKey((v) => (v ?? 0) + 1);
 }, []);
+const clearGameTriggers = useCallback(() => {
+  setScoringOpenNewKey(undefined);
+  setCricketOpenNewKey(undefined);
+  setScoringReplayKey(undefined);
+  setCricketReplayKey(undefined);
+}, []);
 const openDisplayFrom = useCallback((from: 'scoring' | 'cricket') => {
   setShowGameMenu(false);
+  clearGameTriggers();
   setDisplayReturnMode(from);
   setFullscreenBoardId(null);
   setMode('display');
-}, []);
+}, [clearGameTriggers]);
 
-  const openDisplayById = useCallback((id: string, from?: 'scoring' | 'cricket') => {
-    const nextId = String(id || '').trim().toUpperCase();
-    if (!nextId) return;
-    addWatchedId(nextId);
-    setWatchedIds((prev) => (prev.includes(nextId) ? prev : [nextId, ...prev]));
-    if (from) setDisplayReturnMode(from);
-    setFullscreenBoardId(nextId);
-    setMode('display');
-  }, []);
+const openDisplayById = useCallback((id: string, from?: 'scoring' | 'cricket') => {
+  const nextId = String(id || '').trim().toUpperCase();
+  if (!nextId) return;
+  clearGameTriggers();
+  addWatchedId(nextId);
+  setWatchedIds((prev) => (prev.includes(nextId) ? prev : [nextId, ...prev]));
+  if (from) setDisplayReturnMode(from);
+  setFullscreenBoardId(nextId);
+  setMode('display');
+}, [clearGameTriggers]);
 
-  const goBackFromDisplay = useCallback(() => {
-    if (fullscreenBoardId) {
-      setFullscreenBoardId(null);
-      return;
-    }
-    setMode(displayReturnMode);
-  }, [displayReturnMode, fullscreenBoardId]);
+const goBackFromDisplay = useCallback(() => {
+  if (fullscreenBoardId) {
+    setFullscreenBoardId(null);
+    return;
+  }
+  clearGameTriggers();
+  setMode(displayReturnMode);
+}, [clearGameTriggers, displayReturnMode, fullscreenBoardId]);
 
   const currentFullscreenEntry = fullscreenBoardId ? allBoards[fullscreenBoardId] : null;
-  const gridBoards = fullscreenBoardId ? (currentFullscreenEntry ? [currentFullscreenEntry] : []) : visibleBoards;
-  const gridCount = gridBoards.length;
-  const gridCols = gridCount <= 0 ? 1 : gridCount < 4 ? gridCount : 2;
-  const gridRows = gridCount <= gridCols ? 1 : Math.ceil(gridCount / gridCols);
-  const gridItemStyle = useMemo<StyleProp<ViewStyle>>(() => [styles.gridItemBase, { width: `${100 / gridCols}%`, height: fullscreenBoardId ? '100%' as any : undefined }], [gridCols, fullscreenBoardId]);
+const displayBoards = fullscreenBoardId ? (currentFullscreenEntry ? [currentFullscreenEntry] : []) : visibleBoards;
 
+const canUseGridLayout = displayBoards.length <= 8;
+const effectiveDisplayLayout: 'grid' | 'list' =
+  !fullscreenBoardId && canUseGridLayout ? displayLayout : 'list';
+
+const gridSlotCount =
+  displayBoards.length <= 4 ? 4 : displayBoards.length <= 8 ? 8 : 0;
+
+const paddedGridBoards: Array<(typeof displayBoards)[number] | null> =
+  effectiveDisplayLayout === 'grid'
+    ? [...displayBoards, ...Array(Math.max(0, gridSlotCount - displayBoards.length)).fill(null)]
+    : [];
+
+const gridItemStyle = useMemo<StyleProp<ViewStyle>>(
+  () => [
+    styles.gridItemBase,
+    {
+      width: fullscreenBoardId ? ('100%' as any) : '25%',
+      height: fullscreenBoardId ? ('100%' as any) : undefined,
+    },
+  ],
+  [fullscreenBoardId]
+);
 if (mode === 'scoring' || mode === 'cricket') {
   return (
     <View style={styles.safe}>
@@ -731,13 +780,16 @@ if (mode === 'scoring' || mode === 'cricket') {
         />
       )}
 
+      
       <Pressable
-        style={styles.rootCornerMenu}
+        style={[
+          styles.rootCornerMenu,
+          { right: 6 + insets.right, bottom: 6 + insets.bottom }
+        ]}
         onPress={() => setShowGameMenu((v) => !v)}
       >
         <Text style={styles.rootCornerMenuText}>☰</Text>
       </Pressable>
-
       <Modal
         visible={showGameMenu}
         transparent
@@ -747,13 +799,16 @@ if (mode === 'scoring' || mode === 'cricket') {
         <Pressable style={styles.quickMenuOverlay} onPress={closeGameMenu}>
           <View style={styles.quickMenuCard}>
             <Pressable style={styles.quickMenuItem} onPress={openScoringNewGame}>
-              <Text style={styles.quickMenuItemText}>new 501</Text>
+              <Text style={styles.quickMenuItemText}>
+                {gameMode === 'scoring' ? 'new 501' : '501'}
+              </Text>
             </Pressable>
 
             <Pressable style={styles.quickMenuItem} onPress={openCricketNewGame}>
-              <Text style={styles.quickMenuItemText}>new Cricket</Text>
+              <Text style={styles.quickMenuItemText}>
+                {gameMode === 'cricket' ? 'new Cricket' : 'Cricket'}
+              </Text>
             </Pressable>
-
             <Pressable
               style={styles.quickMenuItem}
               onPress={() => openDisplayFrom(gameMode)}
@@ -764,7 +819,7 @@ if (mode === 'scoring' || mode === 'cricket') {
               style={styles.quickMenuItem}
               onPress={replayCurrentGame}
             >
-              <Text style={styles.quickMenuItemText}>re-play</Text>
+              <Text style={styles.quickMenuItemText}>re-match</Text>
             </Pressable>
           </View>
         </Pressable>
@@ -779,42 +834,55 @@ if (mode === 'history') {
   return (
     
     <View style={styles.safe}>
-      <GestureDetector gesture={displayPinchGesture}>
-      <View style={[styles.screen, { padding: 8 }]}>
-        <Pressable onPress={goBackFromDisplay} hitSlop={12} style={styles.displayBackChip}>
-          <Text style={styles.displayBackChipText}>← back</Text>
+  <View style={[styles.screen, { padding: 8 }]}>
+    <Pressable onPress={goBackFromDisplay} hitSlop={12} style={styles.displayBackChip}>
+      <Text style={styles.displayBackChipText}>←</Text>
+    </Pressable>
+
+    {showHud ? (
+      <View style={[styles.bottomLeftRow, { left: 10 + insets.left, bottom: 12 + insets.bottom }]}>
+        <Pressable onPress={() => setMode('history')} hitSlop={12} style={styles.scoringChip}>
+          <Text style={[styles.clubChipText, { fontSize: scaleFont(13, fontZoom) }]}>history</Text>
         </Pressable>
 
-        <View style={[styles.bottomLeftRow, { left: 10, bottom: 40 }]}>
-          <Pressable onPress={() => setMode('history')} hitSlop={12} style={styles.scoringChip}>
-            <Text style={[styles.clubChipText, { fontSize: scaleFont(13, fontZoom) }]}>history</Text>
-          </Pressable>
+        <Pressable
+          onPress={() => setFontZoom((z) => clamp(z - FONT_ZOOM_STEP, FONT_ZOOM_MIN, FONT_ZOOM_MAX))}
+          hitSlop={12}
+          style={styles.scoringChip}
+        >
+          <Text style={[styles.clubChipText, { fontSize: scaleFont(13, fontZoom) }]}> - </Text>
+        </Pressable>
 
-          <Pressable
-            onPress={() => setFontZoom((z) => clamp(z - FONT_ZOOM_STEP, FONT_ZOOM_MIN, FONT_ZOOM_MAX))}
-            hitSlop={12}
-            style={styles.scoringChip}
-          >
-            <Text style={[styles.clubChipText, { fontSize: scaleFont(13, fontZoom) }]}> - </Text>
-          </Pressable>
+        <Pressable
+          onPress={() => setFontZoom((z) => clamp(z + FONT_ZOOM_STEP, FONT_ZOOM_MIN, FONT_ZOOM_MAX))}
+          hitSlop={12}
+          style={styles.scoringChip}
+        >
+          <Text style={[styles.clubChipText, { fontSize: scaleFont(13, fontZoom) }]}> + </Text>
+        </Pressable>
+      </View>
+    ) : null}
 
-          {/* <Pressable
-            onPress={() => setFontZoom(1)}
-            hitSlop={12}
-            style={styles.scoringChip}
-          >
-            <Text style={[styles.clubChipText, { fontSize: scaleFont(13, fontZoom) }]}>A</Text>
-          </Pressable> */}
+    {showHud && !fullscreenBoardId ? (
+      <Pressable
+        style={[styles.layoutToggleBtn, { right: 10 + insets.right, bottom: 12 + insets.bottom }]}
+        onPress={() => {
+          if (!canUseGridLayout) {
+            setDisplayLayout('list');
+            return;
+          }
+          setDisplayLayout((v) => (v === 'grid' ? 'list' : 'grid'));
+        }}
+        hitSlop={12}
+      >
+        <Text style={styles.layoutToggleBtnText}>
+          {effectiveDisplayLayout === 'grid' ? '☷' : '▦'}
+        </Text>
+      </Pressable>
+    ) : null}
 
-          <Pressable
-            onPress={() => setFontZoom((z) => clamp(z + FONT_ZOOM_STEP, FONT_ZOOM_MIN, FONT_ZOOM_MAX))}
-            hitSlop={12}
-            style={styles.scoringChip}
-          >
-            <Text style={[styles.clubChipText, { fontSize: scaleFont(13, fontZoom) }]}> + </Text>
-          </Pressable>
-        </View>
-
+    <GestureDetector gesture={displayGesture}>
+      <View style={styles.displayGestureArea}>
         {fullscreenBoardId ? (
           currentFullscreenEntry ? (
             <BoardCard
@@ -828,33 +896,61 @@ if (mode === 'history') {
               fontZoom={fontZoom}
             />
           ) : (
-            <View style={[styles.card, styles.cardBase, styles.cardFullscreen, { alignItems: 'center', justifyContent: 'center' }]}><Text style={styles.emptyText}>No live data for this board.</Text></View>
+            <View style={[styles.card, styles.cardBase, styles.cardFullscreen, { alignItems: 'center', justifyContent: 'center' }]}>
+              <Text style={styles.emptyText}>No live data for this board.</Text>
+            </View>
           )
         ) : (
           <ScrollView contentContainerStyle={{ paddingTop: 52, paddingBottom: 24 }}>
-            <View style={styles.gridWrap}>
-              {gridBoards.map((entry: any, idx) => (
-                <View key={entry.id} style={gridItemStyle}>
-                  <BoardCard
-                    boardNr={0}
-                    data={entry.data}
-                    isFullscreen={false}
-                    onToggleFullscreen={() => setFullscreenBoardId(entry.id)}
-                    onUiAction={() => {}}
-                    isAlt={idx % 2 === 1}
-                    isFresh={true}
-                    isStale={false}
-                    fontZoom={fontZoom}
-                  />
-                </View>
-              ))}
-              {gridBoards.length === 0 ? <Text style={[styles.emptyText, { marginTop: 80 }]}>No nearby or linked live boards.</Text> : null}
-            </View>
+            {displayBoards.length === 0 ? (
+              <Text style={[styles.emptyText, { marginTop: 80 }]}>No nearby or linked live boards.</Text>
+            ) : effectiveDisplayLayout === 'list' ? (
+              <View style={styles.listWrap}>
+                {displayBoards.map((entry: any, idx) => (
+                  <View key={entry.id} style={styles.listItemWrap}>
+                    <BoardCard
+                      boardNr={0}
+                      data={entry.data}
+                      isFullscreen={false}
+                      onToggleFullscreen={() => setFullscreenBoardId(entry.id)}
+                      onUiAction={() => {}}
+                      isAlt={idx % 2 === 1}
+                      isFresh={true}
+                      isStale={false}
+                      fontZoom={fontZoom}
+                    />
+                  </View>
+                ))}
+              </View>
+            ) : (
+              <View style={styles.gridWrap}>
+                {paddedGridBoards.map((entry: any, idx) => (
+                  <View key={entry ? entry.id : `empty-${idx}`} style={gridItemStyle}>
+                    {entry ? (
+                      <BoardCard
+                        boardNr={0}
+                        data={entry.data}
+                        isFullscreen={false}
+                        onToggleFullscreen={() => setFullscreenBoardId(entry.id)}
+                        onUiAction={() => {}}
+                        isAlt={idx % 2 === 1}
+                        isFresh={true}
+                        isStale={false}
+                        fontZoom={fontZoom}
+                      />
+                    ) : (
+                      <View style={styles.gridEmptySlot} />
+                    )}
+                  </View>
+                ))}
+              </View>
+            )}
           </ScrollView>
         )}
       </View>
-      </GestureDetector>
-    </View>
+    </GestureDetector>
+  </View>
+</View>
   );
 }
 
@@ -1095,7 +1191,45 @@ gridWrap: {
     color: "rgba(255,255,255,0.6)",
     fontSize: 14,
   },
+listWrap: {
+  gap: 12,
+},
 
+listItemWrap: {
+  paddingHorizontal: 6,
+  paddingBottom: 6,
+},
+
+gridEmptySlot: {
+  minHeight: 140,
+  borderRadius: 18,
+  backgroundColor: 'transparent',
+},
+
+layoutToggleBtn: {
+  position: 'absolute',
+  right: 10,
+  bottom: 40,
+  zIndex: 1999,
+  width: 46,
+  height: 46,
+  borderRadius: 999,
+  borderWidth: 1,
+  borderColor: CLUB_CHIP_BORDER,
+  backgroundColor: CLUB_CHIP_BG,
+  alignItems: 'center',
+  justifyContent: 'center',
+},
+
+layoutToggleBtnText: {
+  color: CLUB_CHIP_TEXT,
+  fontSize: 22,
+  fontWeight: '900',
+  lineHeight: 22,
+},
+displayGestureArea: {
+  flex: 1,
+},
   bodyWrap: {
     flex: 1,
     position: "relative",
@@ -1583,8 +1717,7 @@ clubIdHelpText: {
   },
   rootCornerMenu: {
   position: 'absolute',
-  right: 14,
-  bottom: 34,
+  
   zIndex: 5000,
   width: 58,
   height: 58,

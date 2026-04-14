@@ -1,3 +1,4 @@
+import { MaterialIcons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Location from 'expo-location';
 import { onValue, push, ref } from 'firebase/database';
@@ -1304,15 +1305,15 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null, dra
     const src = require('./broadcast.png');
     const isActive = !!boardId && (locationGranted || qrActivated);
     return (
-      <View style={styles.broadcastOuter} pointerEvents="none">
-        <View style={[styles.broadcastCircle, isActive ? styles.broadcastCircleOn : styles.broadcastCircleOff]}>
+      <View  pointerEvents="none">
+        <View >
           <Image source={src} style={styles.broadcastIconInside} />
         </View>
-        {isActive ? (
+        {/* {isActive ? (
           <View style={styles.broadcastBadge}>
             <Text style={styles.broadcastBadgeText}>QR</Text>
           </View>
-        ) : null}
+        ) : null} */}
       </View>
     );
   };
@@ -1449,7 +1450,7 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null, dra
   );
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom', 'left', 'right']}>
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <View style={styles.screen}>
         {topHeader}
         <View style={styles.keyboardArea}>{keyboard}</View>
@@ -1475,7 +1476,15 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null, dra
       >
         <Pressable style={styles.modalOverlay} onPress={() => setShowBroadcastDialog(false)}>
           <Pressable style={styles.modalCard} onPress={() => {}}>
-            <Text style={styles.modalTitle}>Broadcast</Text>
+            <Text style={styles.modalTitle}></Text>
+            <Pressable
+              style={styles.modalCloseBtn}
+              onPress={() => setShowBroadcastDialog(false)}
+              hitSlop={10}
+            >
+              
+              <Text style={styles.modalCloseBtnText}>×</Text>
+            </Pressable>
             <Text style={styles.modalLabel}>
               Scan this with another device for display.
             </Text>
@@ -1493,20 +1502,21 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null, dra
 
             <Text style={styles.orLabel}>OR</Text>
 
-            <View style={styles.modalBtnsSingle}>
-              <Pressable
-                style={[styles.modalBtn, styles.modalBtnOk]}
-                onPress={async () => {
-                  const granted = cameraPermission?.granted || (await requestCameraPermission())?.granted;
-                  if (!granted) return;
-                  setShowBroadcastDialog(false);
-                  setShowScannerScreen(true);
-                  setHasScannedQr(false);
-                }}
-              >
-                <Text style={styles.modalBtnTextOk}>Scan another device</Text>
-              </Pressable>
-            </View>
+              <View style={styles.modalBtnsSingle}>
+                <Pressable
+                  style={styles.scanScoreboardBtn}
+                  onPress={async () => {
+                    const granted = cameraPermission?.granted || (await requestCameraPermission())?.granted;
+                    if (!granted) return;
+                    setShowBroadcastDialog(false);
+                    setShowScannerScreen(true);
+                    setHasScannedQr(false);
+                  }}
+                >
+                  <MaterialIcons name="qr-code-scanner" size={22} color="rgba(0,0,0,0.78)" />
+                  <Text style={styles.scanScoreboardBtnText}>Scan another device&apos;s scoreboard</Text>
+                </Pressable>
+              </View>
           </Pressable>
         </Pressable>
       </Modal>
@@ -1677,7 +1687,7 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null, dra
           
         >
           <Pressable style={styles.modalCard} onPress={() => {}}>
-            <Text style={styles.modalTitle}>New game</Text>
+             <Text style={styles.modalTitle}>New 501</Text> 
 
             <View style={styles.namesBlock}>
               {draft.vsVirtual ? (
@@ -1864,7 +1874,7 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null, dra
               )}
 
               <Pressable onPress={draft.vsVirtual ? toggleDraftVirtualSwap : swapHumanNames} hitSlop={10} style={styles.swapBtnBetween}>
-                <Text style={styles.swapBtnText}>â‡„</Text>
+                <Text style={styles.swapBtnText}>⇄</Text>
               </Pressable>
             </View>
 
@@ -1882,7 +1892,7 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null, dra
 
             <View style={styles.modalBtnsSingle}>
               <Pressable
-                style={[styles.modalBtn, styles.modalBtnOk, styles.modalBtnArrow]}
+                style={[styles.modalBtnOk, styles.modalBtnArrow]}
                 onPress={() => {
                   setShowMenuName1Suggestions(false);
                   setShowMenuName2Suggestions(false);
@@ -1893,9 +1903,9 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null, dra
               </Pressable>
             </View>
 
-            <Pressable onPress={onExit} hitSlop={8} style={styles.exitInline}>
+            {/* <Pressable onPress={onExit} hitSlop={8} style={styles.exitInline}>
               <Text style={styles.exitInlineText}>Exit scoring mode</Text>
-            </Pressable>
+            </Pressable> */}
           </Pressable>
         </Pressable>
       </Modal>
@@ -1968,7 +1978,6 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null, dra
       <Modal visible={showNamesDialog} transparent animationType="fade" onRequestClose={() => setShowNamesDialog(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Players</Text>
 
             <View style={styles.namesBlock}>
               <Pressable
@@ -2057,7 +2066,7 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null, dra
                 ) : null}
               {!matchConfig.vsVirtual ? (
                 <Pressable onPress={swapHumanNames} hitSlop={10} style={styles.swapBtnBetween}>
-                  <Text style={styles.swapBtnText}>â‡„</Text>
+                  <Text style={styles.swapBtnText}>⇄</Text>
                 </Pressable>
               ) : null}
             </View>
@@ -2199,6 +2208,7 @@ function KeyFlex(props: { label: string; onPress: () => void; kind?: 'num' | 'ac
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#ffffff' },
   screen: { flex: 1, backgroundColor: '#ffffff' },
+topSpacer: { height: 0 },
   topHeader: { paddingTop: 4, paddingHorizontal: 8, paddingBottom: 4 },
   topNamesRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 },
   nameSmall: { color: 'rgba(0,0,0,0.65)', fontWeight: '900', fontSize: 16, maxWidth: 140 },
@@ -2259,7 +2269,7 @@ const styles = StyleSheet.create({
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', alignItems: 'center', justifyContent: 'center' },
   modalCard: { width: '92%', maxWidth: 380, backgroundColor: '#fff', borderRadius: 14, padding: 14 },
   modalTitle: { fontWeight: '900', fontSize: 18, marginBottom: 10, color: 'rgba(0,0,0,0.85)' },
-  modalLabel: { fontWeight: '800', color: 'rgba(0,0,0,0.6)', marginTop: 6, marginBottom: 4 },
+  modalLabel: { fontWeight: '800', color: 'rgba(0,0,0,0.6)',textAlign: 'center', marginTop: 6, marginBottom: 4 },
   modalInput: { borderWidth: 1, borderColor: 'rgba(0,0,0,0.2)', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, fontWeight: '800', color: 'rgba(0,0,0,0.85)' },
   modalInputDisabled: { borderWidth: 1, borderColor: 'rgba(0,0,0,0.16)', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 11, backgroundColor: 'rgba(0,0,0,0.04)' },
   modalInputDisabledText: { fontWeight: '900', color: 'rgba(0,0,0,0.72)' },
@@ -2272,7 +2282,7 @@ const styles = StyleSheet.create({
   boardPickTextOff: { color: 'rgba(0,0,0,0.6)' },
   boardPickTextOn: { color: '#2f6f18' },
   boardPickTextDim: { color: 'rgba(0,0,0,0.45)' },
-  modalHintSmall: { marginTop: 10, color: 'rgba(63,63,63,0.45)', fontWeight: '800', fontSize: 12 },
+  modalHintSmall: { marginTop: 10, color: 'rgba(63,63,63,0.45)',textAlign: 'center', fontWeight: '800', fontSize: 12 },
   namesGap: { height: 10 },
   swapBtnText: { fontSize: 20, fontWeight: '900', color: 'rgba(0,0,0,0.6)', transform: [{ rotate: '90deg' }, { translateY: -3 }] },
   swapBtnBetween: { position: 'absolute', right: 8, top: '50%', marginTop: -20, width: 40, height: 40, borderRadius: 999, backgroundColor: 'rgba(0,0,0,0.08)', alignItems: 'center', justifyContent: 'center' },
@@ -2291,7 +2301,45 @@ const styles = StyleSheet.create({
   borderRadius: 16,
   marginTop: 10,
 },
+modalCloseBtn: {
+  position: 'absolute',
+  right: 10,
+  top: 10,
+  width: 34,
+  height: 34,
+  borderRadius: 999,
+  alignItems: 'center',
+  justifyContent: 'center',
+  backgroundColor: 'rgba(0,0,0,0.06)',
+  zIndex: 5,
+},
 
+modalCloseBtnText: {
+  fontSize: 24,
+  lineHeight: 24,
+  fontWeight: '900',
+  color: 'rgba(0,0,0,0.7)',
+},
+
+scanScoreboardBtn: {
+  minHeight: 52,
+  borderRadius: 12,
+  borderWidth: 1.5,
+  borderColor: 'rgba(0,0,0,0.22)',
+  backgroundColor: '#ffffff',
+  paddingHorizontal: 14,
+  paddingVertical: 12,
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 10,
+},
+
+scanScoreboardBtnText: {
+  color: 'rgba(0,0,0,0.82)',
+  fontWeight: '900',
+  textAlign: 'center',
+},
 orLabel: {
   marginTop: 14,
   textAlign: 'center',
@@ -2302,6 +2350,15 @@ orLabel: {
 
 modalBtnsSingle: {
   marginTop: 12,
+  alignItems: 'flex-end',
+},
+
+modalBtnArrow: {
+  width: 120,
+  height: 56,
+  borderRadius: 16,
+  alignItems: 'center',
+  justifyContent: 'center',
 },
 
 scannerScreen: {
@@ -2440,7 +2497,6 @@ scannerFallback: {
   modalBtnOk: { backgroundColor: '#2f6f18' },
   modalBtnTextGhost: { fontWeight: '900', color: 'rgba(0,0,0,0.75)' },
   modalBtnTextOk: { fontWeight: '900', color: '#ffffff' },
-  modalBtnArrow: { minWidth: 72, minHeight: 44, alignSelf: 'flex-end', flexGrow: 0, justifyContent: 'center' },
   modalBtnArrowImage: { width: 24, height: 24, resizeMode: 'contain', tintColor: '#ffffff' },
   onlineInlineWrap: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },
   onlineInlineText: { fontWeight: '900', color: 'rgba(0,0,0,0.55)', textDecorationLine: 'underline' },
