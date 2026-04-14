@@ -1,8 +1,11 @@
+import * as Location from 'expo-location';
 import { onValue, ref } from "firebase/database";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DimensionValue, StyleProp, ViewStyle } from "react-native";
+
 import {
-  Modal,
+  Linking, Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -264,7 +267,39 @@ function useDisplayWakeLock(enabled: boolean) {
 
   return state;
 }
+const CURRENT_VERSION_CODE = 1;
 
+const [showUpdateDialog, setShowUpdateDialog] = useState(false);
+const [updateTitle, setUpdateTitle] = useState('Update available');
+const [updateMessage, setUpdateMessage] = useState('');
+const [updateStoreUrl, setUpdateStoreUrl] = useState('');
+useEffect(() => {
+  const updateRef = ref(db, "appConfig/update");
+
+  const unsub = onValue(updateRef, (snap) => {
+    const value = snap.val();
+    const enabled = !!value?.enabled;
+    const minVersionCode = Number(value?.minVersionCode) || 0;
+    const title = String(value?.title || "Update available");
+    const message = String(value?.message || "");
+    const storeUrl = String(value?.storeUrl || "");
+
+    if (true) {
+      // setUpdateTitle(title);
+      // setUpdateMessage(message);
+      // setUpdateStoreUrl(storeUrl);
+      // setShowUpdateDialog(true);
+      setUpdateTitle("Update available");
+setUpdateMessage("Test update dialog from Firebase logic.");
+setUpdateStoreUrl("https://play.google.com/store/apps/details?id=hu.fazo.dartstrainer");
+setShowUpdateDialog(true);
+      return;
+    }
+
+  });
+
+  return () => unsub();
+}, []);
 function loadClubId(): string {
   try {
     if (typeof window === "undefined") return DEFAULT_CLUB_ID;
@@ -567,7 +602,11 @@ function StatRow(props: { left: string; label: string; right: string; fontZoom: 
 }
 
 export default function HomeScreen() {
+
+
   const insets = useSafeAreaInsets();
+  const [showStartupLocationDialog, setShowStartupLocationDialog] = useState(false);
+const startupLocationAskedRef = useRef(false);
   const { width, height } = useWindowDimensions();
   const isPortrait = height >= width;
   const [mode, setMode] = useState<"display" | "scoring" | "cricket" | "history">(() => {
@@ -594,12 +633,57 @@ export default function HomeScreen() {
   const [cricketReplayKey, setCricketReplayKey] = useState<number | undefined>(undefined);
   const pinchStartZoomRef = useRef(1);
   useEffect(() => { saveWatchedIds(watchedIds); }, [watchedIds]);
-
-  useEffect(() => {
+useEffect(() => {
+  if (Platform.OS === "web") {
     void requestBrowserLikeLocation().then((coords) => {
       setLocationCoords(coords);
     });
-  }, []);
+    return;
+  }
+
+  if (Platform.OS !== "android") {
+    return;
+  }
+
+  if (startupLocationAskedRef.current) {
+    return;
+  }
+
+  startupLocationAskedRef.current = true;
+
+  void (async () => {
+    try {
+      const current = await Location.getForegroundPermissionsAsync();
+
+      if (current.status === "granted") {
+        const lastKnown = await Location.getLastKnownPositionAsync();
+        if (lastKnown?.coords) {
+          setLocationCoords({
+            lat: lastKnown.coords.latitude,
+            lng: lastKnown.coords.longitude,
+          });
+          return;
+        }
+
+        const currentPos = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+
+        setLocationCoords({
+          lat: currentPos.coords.latitude,
+          lng: currentPos.coords.longitude,
+        });
+        return;
+      }
+
+      if (current.status === "denied" && !current.canAskAgain) {
+        return;
+      }
+
+      setShowStartupLocationDialog(true);
+    } catch {}
+  })();
+}, []);
 
   useEffect(() => {
     const unsub = onValue(ref(db, 'boards'), (snap) => {
@@ -824,6 +908,99 @@ if (mode === 'scoring' || mode === 'cricket') {
           </View>
         </Pressable>
       </Modal>
+      <Modal
+  visible={showStartupLocationDialog}
+  transparent
+  animationType="fade"
+  onRequestClose={() => setShowStartupLocationDialog(false)}
+>
+  <Pressable
+    style={styles.modalOverlay}
+    onPress={() => setShowStartupLocationDialog(false)}
+  >
+    <Pressable style={styles.modalCard} onPress={() => {}}>
+      <Text style={styles.modalTitle}>Location access</Text>
+
+      <Text style={styles.modalLabel}>
+        Allow location access so your board can appear on the big display when you use the app inside the club.
+      </Text>
+
+      <View style={styles.modalBtns}>
+        <Pressable
+          style={[styles.modalBtn, styles.modalBtnGhost]}
+          onPress={() => setShowStartupLocationDialog(false)}
+        >
+          <Text style={styles.modalBtnTextGhost}>Not now</Text>
+        </Pressable>
+
+        <Pressable
+          style={[styles.modalBtn, styles.modalBtnOk]}
+          onPress={async () => {
+            try {
+              const asked = await Location.requestForegroundPermissionsAsync();
+
+              if (asked.status === "granted") {
+                const lastKnown = await Location.getLastKnownPositionAsync();
+                if (lastKnown?.coords) {
+                  setLocationCoords({
+                    lat: lastKnown.coords.latitude,
+                    lng: lastKnown.coords.longitude,
+                  });
+                } else {
+                  const currentPos = await Location.getCurrentPositionAsync({
+                    accuracy: Location.Accuracy.Balanced,
+                  });
+
+                  setLocationCoords({
+                    lat: currentPos.coords.latitude,
+                    lng: currentPos.coords.longitude,
+                  });
+                }
+              }
+            } catch {}
+
+            setShowStartupLocationDialog(false);
+          }}
+        >
+          <Text style={styles.modalBtnTextOk}>Continue</Text>
+        </Pressable>
+      </View>
+    </Pressable>
+  </Pressable>
+</Modal>
+<Modal
+  visible={showUpdateDialog}
+  transparent
+  animationType="fade"
+  onRequestClose={() => setShowUpdateDialog(false)}
+>
+  <View style={styles.modalOverlay}>
+    <View style={styles.modalCard}>
+      <Text style={styles.modalTitle}>{updateTitle}</Text>
+      <Text style={styles.modalLabel}>{updateMessage}</Text>
+
+      <View style={styles.modalBtns}>
+        <Pressable
+          style={[styles.modalBtn, styles.modalBtnGhost]}
+          onPress={() => setShowUpdateDialog(false)}
+        >
+          <Text style={styles.modalBtnTextGhost}>LATER</Text>
+        </Pressable>
+
+        <Pressable
+          style={[styles.modalBtn, styles.modalBtnOk]}
+          onPress={() => {
+            if (updateStoreUrl) {
+              void Linking.openURL(updateStoreUrl);
+            }
+          }}
+        >
+          <Text style={styles.modalBtnTextOk}>UPDATE</Text>
+        </Pressable>
+      </View>
+    </View>
+  </View>
+</Modal>
     </View>
   );
 }

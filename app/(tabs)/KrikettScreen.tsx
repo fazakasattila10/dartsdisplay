@@ -1251,8 +1251,19 @@ const src = require('./broadcast.png');
 };
   const keyHitSlop = { top: 10, bottom: 10, left: 10, right: 10 } as const;
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-      <View style={styles.screen}>
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom', 'left', 'right']}>
+    <View
+      style={[
+        styles.screen,
+        !isPortrait
+          ? {
+              paddingLeft: insets.left,
+              paddingRight: insets.right,
+              paddingBottom: insets.bottom,
+            }
+          : null,
+      ]}
+    >
         <View style={styles.topSpacer} />
 
         <Pressable
@@ -1678,7 +1689,7 @@ const src = require('./broadcast.png');
 
             <Text style={styles.orLabel}>OR</Text>
 
-            <View style={styles.modalBtnsSingle}>
+            <View style={styles.modalBtnsSingleCenter}>
               <Pressable
                 style={styles.scanScoreboardBtn}
                 onPress={async () => {
@@ -1905,8 +1916,8 @@ cricketMarkChipShort: {
   borderRadius: 6,
 },
 playerCellPortrait: {
-  flex: 2.31,
-  minWidth: 64,
+  flex: 2.11,
+  minWidth: 34,
   alignItems: 'flex-start',
   justifyContent: 'space-between',
 },
@@ -2008,6 +2019,7 @@ scanScoreboardBtn: {
   paddingHorizontal: 14,
   paddingVertical: 12,
   flexDirection: 'row',
+  alignSelf: 'center',
   alignItems: 'center',
   justifyContent: 'center',
   gap: 10,
@@ -2028,6 +2040,13 @@ orLabel: {
 
 modalBtnsSingle: {
   marginTop: 12,
+},
+
+modalBtnsSingleCenter: {
+  marginTop: 12,
+   alignItems: 'center',
+    alignSelf: 'center',
+  justifyContent: 'center',
 },
 
 scannerScreen: {
@@ -2355,7 +2374,7 @@ cricketMarkChipLabel: {
   
   inputArea: { flex: 1, marginTop: 10 },
   turnInputWrap: { marginBottom: 8 },
-  turnInput: { height: 44, backgroundColor: '#fff', borderWidth: 2, borderColor: 'rgba(0,0,0,0.18)', borderRadius: 10, paddingHorizontal: 12, fontSize: 20, fontWeight: '900', color: 'rgba(0,0,0,0.82)' },
+  turnInput: { height: 44, backgroundColor: '#fff', borderWidth: 2, borderColor: 'rgba(0,0,0,0.18)', borderRadius: 10, paddingHorizontal: 12, fontSize: 18, fontWeight: '900', color: 'rgba(0,0,0,0.82)' },
   turnInputLandscape: {
     flex: 1,
   },

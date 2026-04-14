@@ -16,7 +16,7 @@ import {
   View,
   useWindowDimensions
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { db } from '../../lib/firebase';
 import { addWatchedId, buildBoardShareUrl, buildQrImageUrl, getOrCreateBoardId, getOrCreateDeviceId, parseBoardIdFromText, publishBoardRecord, requestBrowserLikeLocation } from './broadcastShared';
 
@@ -361,7 +361,7 @@ function useDisplayWakeLock(enabled: boolean) {
 
   return state;
 }
-export default function ScoringScreen2({ onExit, clubId, initialBoardNr, onOpenCricket, onOpenDisplay, onOpenDisplayById, openNewGameRequestKey, replayRequestKey }: Props) {  const { width, height } = useWindowDimensions();
+export default function ScoringScreen2({ onExit, clubId, initialBoardNr, onOpenCricket, onOpenDisplay, onOpenDisplayById, openNewGameRequestKey, replayRequestKey }: Props) {  const { width, height } = useWindowDimensions();const insets = useSafeAreaInsets();
   const isPortrait = height >= width;
   const wakeLock = useDisplayWakeLock(true);
     const initialVirtualPrefs = useMemo(() => loadVirtualPrefs(), []);
@@ -1450,8 +1450,19 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null, dra
   );
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-      <View style={styles.screen}>
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom', 'left', 'right']}>
+    <View
+      style={[
+        styles.screen,
+        !isPortrait
+          ? {
+              paddingLeft: insets.left,
+              paddingRight: insets.right,
+              paddingBottom: insets.bottom,
+            }
+          : null,
+      ]}
+    >
         {topHeader}
         <View style={styles.keyboardArea}>{keyboard}</View>
         <View style={styles.statsBar}>{statsChips}</View>
@@ -1502,7 +1513,7 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null, dra
 
             <Text style={styles.orLabel}>OR</Text>
 
-              <View style={styles.modalBtnsSingle}>
+              <View style={styles.modalBtnsSingleCenter}>
                 <Pressable
                   style={styles.scanScoreboardBtn}
                   onPress={async () => {
@@ -2321,6 +2332,12 @@ modalCloseBtnText: {
   color: 'rgba(0,0,0,0.7)',
 },
 
+modalBtnsSingleCenter: {
+  marginTop: 12,
+   alignItems: 'center',
+    alignSelf: 'center',
+  justifyContent: 'center',
+},
 scanScoreboardBtn: {
   minHeight: 52,
   borderRadius: 12,

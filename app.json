@@ -20,7 +20,7 @@
       },
       "edgeToEdgeEnabled": false,
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.dartsdisplay",
+      "package": "hu.fazo.dartstrainer",
       
     },
      "androidStatusBar": {
