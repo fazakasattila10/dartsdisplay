@@ -433,7 +433,16 @@ export default function ScoringScreen2({ onExit, clubId, initialBoardNr, onOpenC
   const deviceInfoRef = useRef<string>(getOrCreateDeviceId());
   const virtualPlanRef = useRef<VirtualPlanState>(null);
   const virtualTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
+  const trackAnalyticsClick = useCallback(async (clickType: string, extraInfo: string = '') => {
+  try {
+    await push(ref(db, 'analyticsClicks'), {
+      deviceId: deviceInfoRef.current,
+      timestamp: Date.now(),
+      extraInfo,
+      clickType,
+    });
+  } catch {}
+}, []);
   useEffect(() => { legStarterRef.current = legStarter; }, [legStarter]);
   useEffect(() => { playersRef.current = players; }, [players]);
   useEffect(() => { lastThrowRef.current = lastThrow; }, [lastThrow]);
@@ -507,19 +516,36 @@ const requestAppLocation = useCallback(async () => {
     return false;
   }
 }, []);
- useEffect(() => {
+useEffect(() => {
   void getOrCreateBoardId(deviceInfoRef.current).then(setBoardId);
 
-  void requestBrowserLikeLocation().then((coords) => {
-    if (coords) {
-      setLocationCoords(coords);
-      setLocationGranted(true);
-    } else {
+  if (Platform.OS === 'web') {
+    void requestBrowserLikeLocation().then((coords) => {
+      if (coords) {
+        setLocationCoords(coords);
+        setLocationGranted(true);
+      } else {
+        setLocationCoords(null);
+        setLocationGranted(false);
+      }
+    });
+    return;
+  }
+
+  void Location.getForegroundPermissionsAsync()
+    .then(async (perm) => {
+      if (perm.status !== 'granted') {
+        setLocationCoords(null);
+        setLocationGranted(false);
+        return;
+      }
+      await requestAppLocation();
+    })
+    .catch(() => {
       setLocationCoords(null);
       setLocationGranted(false);
-    }
-  });
-}, []);
+    });
+}, [requestAppLocation]);
 
   const [myRole, setMyRole] = useState<null | 'L' | 'R'>(null);
   const [onlineDisabled, setOnlineDisabled] = useState(false);
@@ -992,6 +1018,12 @@ useEffect(() => {
       onDel();
       return;
     }
+
+    if (e?.key === 'Delete') {
+      e.preventDefault?.();
+      onUndo();
+      return;
+    }
   };
 
   win.addEventListener('keydown', handleKeyDown);
@@ -1187,7 +1219,10 @@ const setTmpNamesFromCurrent = () => {
     setShowNamesDialog(false);
   };
 
-  const applySetupStep1 = () => {
+ const applySetupStep1 = () => {
+  const extraInfo = `${(draft.player1 || 'PL.1').trim() || 'PL.1'}|${(draft.player2 || 'PL.2').trim() || 'PL.2'}`;
+  void trackAnalyticsClick('start_501_dialog', extraInfo);
+
   setShowMenuDialog1(false);
   setWarnedBusyBoard(null);
   setMenuBoardTmp(null);
@@ -1331,7 +1366,7 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null, dra
       <StatChip label="Won Avg." v1={format2AndroidLike(wonAvg(players[0]))} v2={format2AndroidLike(wonAvg(players[1]))} />
       <StatChip label="Best" v1={players[0].bestLegDarts ?? 0} v2={players[1].bestLegDarts ?? 0} />
       <StatChip label="H.Out" v1={players[0].highOut} v2={players[1].highOut} />
-      {canSaveStats ? <SaveStatChip label={saveInProgress ? 'saving...' : 'save stats'} onPress={() => void saveStatsToHistory()} /> : null}
+      {/*canSaveStats*/false ? <SaveStatChip label={saveInProgress ? 'saving...' : 'save stats'} onPress={() => void saveStatsToHistory()} /> : null}
       <View style={styles.statsEdgeSpacer} />
     </ScrollView>
   );
@@ -1366,7 +1401,7 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null, dra
             <Text style={styles.scoreBigLeft} numberOfLines={1}>{players[0].score}</Text>
             <DualInput side="left" visible={active === 0 && canInteract} value={active === 0 ? input : ''} onChangeText={safeSetInputWith180Limit} />
           </View>
-          <Pressable onPress={() => { if (boardId) { setQrActivated(true); setShowBroadcastDialog(true); void pushToFirebase(); } }} hitSlop={10} style={styles.broadcastMid}>{renderBroadcastIcon()}</Pressable>
+          <Pressable onPress={() => { if (boardId) { setQrActivated(true); void trackAnalyticsClick('broadcast_pressed_scoring');setShowBroadcastDialog(true); void pushToFirebase(); } }} hitSlop={10} style={styles.broadcastMid}>{renderBroadcastIcon()}</Pressable>
           <View style={[styles.scoreSideLandscape, styles.scoreSideLandscapeRight]}>
             <DualInput side="right" visible={active === 1 && canInteract} value={active === 1 ? input : ''} onChangeText={safeSetInputWith180Limit} />
             <Text style={styles.scoreBigRight} numberOfLines={1}>{players[1].score}</Text>
@@ -1385,7 +1420,7 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null, dra
           </View>
           <View style={styles.inputsRowPortrait}>
             <DualInput side="left" visible={active === 0 && canInteract} value={active === 0 ? input : ''} onChangeText={safeSetInputWith180Limit} />
-            <Pressable onPress={() => { if (boardId) { setQrActivated(true); setShowBroadcastDialog(true); void pushToFirebase(); } }} hitSlop={10} style={styles.broadcastMidPortrait}>{renderBroadcastIcon()}</Pressable>
+            <Pressable onPress={() => { if (boardId) { setQrActivated(true);void trackAnalyticsClick('broadcast_pressed_scoring'); setShowBroadcastDialog(true); void pushToFirebase(); } }} hitSlop={10} style={styles.broadcastMidPortrait}>{renderBroadcastIcon()}</Pressable>
             <DualInput side="right" visible={active === 1 && canInteract} value={active === 1 ? input : ''} onChangeText={safeSetInputWith180Limit} />
           </View>
         </>
@@ -1470,7 +1505,14 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null, dra
           style={styles.cornerCheck}
           onPress={() => {
             blurActiveElement();
-            if (canInteract) applyScoring({ kind: 'check' });
+            if (!canInteract) return;
+
+            void trackAnalyticsClick(
+              'check_pressed_scoring',
+              `${players[0].name}|${players[1].name}`
+            );
+
+            applyScoring({ kind: 'check' });
           }}
         >
           <Text style={styles.cornerCheckText}>check</Text>
@@ -1517,6 +1559,8 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null, dra
                 <Pressable
                   style={styles.scanScoreboardBtn}
                   onPress={async () => {
+                    void trackAnalyticsClick('scan_pressed_scoring');
+
                     const granted = cameraPermission?.granted || (await requestCameraPermission())?.granted;
                     if (!granted) return;
                     setShowBroadcastDialog(false);
@@ -1559,6 +1603,7 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null, dra
                 setShowLocationPermissionDialog(false);
                 if (ok) {
                   setQrActivated(true);
+                  void trackAnalyticsClick('broadcast_pressed_scoring');
                   setShowBroadcastDialog(true);
                 }
               }}
@@ -2103,7 +2148,13 @@ const startGameFromSetup = (withBoard: boolean, forcedBoard?: number | null, dra
               <Pressable key={n} style={[styles.checkoutBtn, styles.modalBtnOk]} onPress={() => confirmCheckout(n)}><Text style={styles.checkoutText}>{n}</Text></Pressable>
             ))}
           </View>
-          <Pressable style={[styles.modalBtn, styles.modalBtnGhost]} onPress={() => setShowCheckout(false)}><Text style={styles.modalBtnTextGhost}>Cancel</Text></Pressable>
+         <Pressable
+            style={styles.checkoutCancelBtn}
+            onPress={() => setShowCheckout(false)}
+          >
+            <Text style={styles.checkoutCancelText}>Cancel</Text>
+          </Pressable>
+         
         </View></View>
       </Modal>
 
@@ -2273,7 +2324,7 @@ topSpacer: { height: 0 },
   saveStatChip: { borderWidth: 1, borderColor: 'rgba(74,13,13,0.12)' },
   saveStatChipPressed: { opacity: 0.78 },
   saveStatChipText: { textTransform: 'lowercase' },
-  cornerCheck: { position: 'absolute', left: 6, bottom: 6, width: 64, height: 64, borderRadius: 999, backgroundColor: '#2f6f18', alignItems: 'center', justifyContent: 'center', zIndex: 999, elevation: 5 },
+  cornerCheck: { position: 'absolute', left: 2, bottom: 2, width: 64, height: 64, borderRadius: 999, backgroundColor: '#2f6f18', alignItems: 'center', justifyContent: 'center', zIndex: 999, elevation: 5 },
   cornerMenu: { position: 'absolute', right: 6, bottom: 6, width: 64, height: 64, borderRadius: 999, backgroundColor: '#2f6f18', alignItems: 'center', justifyContent: 'center', zIndex: 999, elevation: 5 },
   cornerText: { color: '#ffffff', fontWeight: '900', fontSize: 22 },
   cornerCheckText: { color: '#ffffff', fontWeight: '900', fontSize: 16 },
@@ -2511,6 +2562,21 @@ scannerFallback: {
   modalBtns: { flexDirection: 'row', gap: 10, marginTop: 12 },
   modalBtn: { flex: 1, borderRadius: 10, paddingVertical: 10, alignItems: 'center' },
   modalBtnGhost: { backgroundColor: 'rgba(0,0,0,0.08)' },
+  checkoutCancelBtn: {
+  borderRadius: 10,
+  paddingVertical: 10,
+  alignItems: 'center',
+  justifyContent: 'center',
+  backgroundColor: '#eee',
+  minHeight: 44,
+  marginTop: 10,
+},
+
+checkoutCancelText: {
+  color: '#111',
+  fontWeight: '700',
+  fontSize: 16,
+},
   modalBtnOk: { backgroundColor: '#2f6f18' },
   modalBtnTextGhost: { fontWeight: '900', color: 'rgba(0,0,0,0.75)' },
   modalBtnTextOk: { fontWeight: '900', color: '#ffffff' },

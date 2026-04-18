@@ -1,7 +1,7 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Location from 'expo-location';
-import { onValue, ref } from 'firebase/database';
+import { onValue, push, ref } from 'firebase/database';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
@@ -406,8 +406,7 @@ const vertical = !!props.short;
   {!props.hideLabel ? (
     <Text
       style={[
-        styles.cricketMarkChipLabel,
-        vertical ? styles.cricketMarkChipLabelVertical : null,
+        vertical ? styles.cricketMarkChipLabelVertical : styles.cricketMarkChipLabel,
       ]}
       numberOfLines={1}
     >
@@ -694,7 +693,24 @@ const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const virtualTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastLocalSendRef = useRef<number>(0);
   const [boardDialogMode, setBoardDialogMode] = useState<'switch' | 'start'>('switch');
+  const trackAnalyticsClick = useCallback(async (clickType: string, extraInfo: string = '') => {
+    try {
+      await push(ref(db, 'analyticsClicks'), {
+        deviceId: deviceInfoRef.current,
+        timestamp: Date.now(),
+        extraInfo,
+        clickType,
+      });
+    } catch {}
+  }, []);
+  const buildCricketNamesExtra = useCallback((sourceDraft: SetupDraft = draft) => {
+    const p1 = (sourceDraft.humanNames[0] || 'PL.1').trim() || 'PL.1';
+    const p2 = sourceDraft.vsVirtual
+      ? `Lv.${sourceDraft.virtualLevel}`
+      : ((sourceDraft.humanNames[1] || 'PL.2').trim() || 'PL.2');
 
+    return `${p1}|${p2}`;
+  }, [draft]);
   const roundFlashOpacity = useRef(new Animated.Value(0)).current;
   const roundFlashScale = useRef(new Animated.Value(0.88)).current;
 
@@ -831,7 +847,7 @@ const pushToFirebase = useCallback(async () => {
   useEffect(() => {
     playersRef.current = players;
   }, [players]);
-  
+
   useEffect(() => {
     if (boardNr == null) {
       lastLocalSendRef.current = 0;
@@ -1068,20 +1084,21 @@ const pushToFirebase = useCallback(async () => {
   // vagyis a human mÃ¡r ledobta a sajÃ¡t kÃ¶rÃ©t, a virtual mÃ©g nem.
   // Ilyenkor mÃ©g egyet vissza kell lÃ©pni, hogy a human dobÃ¡sa is
   // visszavonÃ³djon, Ã©s ismÃ©t a human kÃ¶vetkezzen Ã¼res bevitellel.
-  const isVirtualMatch = prev.players.some((p) => p.isVirtual);
+const isVirtualMatch = prev.players.some((p) => p.isVirtual);
 
-  if (
-    isVirtualMatch &&
-    players[active] &&
-    !players[active].isVirtual &&
-    prev.players[prev.active] &&
-    !!prev.players[prev.active].isVirtual
-  ) {
+if (isVirtualMatch) {
+  const restoredActivePlayer = prev.players[prev.active];
+
+  // Ha a visszaállított snapshotban is a virtual lenne soron,
+  // akkor még egyet vissza kell lépni, hogy a human üres inputtal
+  // újra tudja játszani az előző körét.
+  if (restoredActivePlayer?.isVirtual) {
     const prevHuman = undoStack.current.pop();
     if (prevHuman) {
       prev = prevHuman;
     }
   }
+}
 
   const restoredPlayers = clonePlayers(prev.players);
 
@@ -1101,6 +1118,111 @@ const pushToFirebase = useCallback(async () => {
   void pushToFirebase();
 };
 
+const onSectorTapRef = useRef(onSectorTap);
+const onEnterRef = useRef(onEnter);
+const onClearRef = useRef(onClear);
+const onUndoRef = useRef(onUndo);
+
+useEffect(() => {
+  onSectorTapRef.current = onSectorTap;
+  onEnterRef.current = onEnter;
+  onClearRef.current = onClear;
+  onUndoRef.current = onUndo;
+}, [onSectorTap, onEnter, onClear, onUndo]);
+
+
+  useEffect(() => {
+  if (Platform.OS !== 'web') return;
+
+  const handleKeyDown = (e: any) => {
+    const key = String(e?.key || '');
+
+    if (
+      showWinnerDialog ||
+      showSetupDialog ||
+      showBoardDialog ||
+      showLevelPicker ||
+      showBroadcastDialog ||
+      showScanDialog ||
+      showLocationPermissionDialog ||
+      showScannerScreen ||
+      showInactiveDialog
+    ) {
+      return;
+    }
+
+    if (key === 'Enter') {
+      e.preventDefault?.();
+      onEnterRef.current();
+      return;
+    }
+
+    if (key === 'Delete') {
+      e.preventDefault?.();
+      onClearRef.current();
+      return;
+    }
+
+    if (key === 'Backspace') {
+      e.preventDefault?.();
+      onUndo();
+      return;
+    }
+
+    if (key === 'b' || key === 'B') {
+      e.preventDefault?.();
+      onSectorTapRef.current('B');
+      return;
+    }
+
+    switch (key) {
+      case '5':
+        e.preventDefault?.();
+        onSectorTapRef.current(15);
+        break;
+      case '6':
+        e.preventDefault?.();
+        onSectorTapRef.current(16);
+        break;
+      case '7':
+        e.preventDefault?.();
+        onSectorTapRef.current(17);
+        break;
+      case '8':
+        e.preventDefault?.();
+        onSectorTapRef.current(18);
+        break;
+      case '9':
+        e.preventDefault?.();
+        onSectorTapRef.current(19);
+        break;
+      case '2':
+        e.preventDefault?.();
+        onSectorTapRef.current(20);
+        break;
+    }
+  };
+
+  window.addEventListener('keydown', handleKeyDown);
+
+  return () => {
+    window.removeEventListener('keydown', handleKeyDown);
+  };
+}, [
+  showWinnerDialog,
+  showSetupDialog,
+  showBoardDialog,
+  showLevelPicker,
+  showBroadcastDialog,
+  showScanDialog,
+  showLocationPermissionDialog,
+  showScannerScreen,
+  showInactiveDialog,
+  showWinnerDialog,
+  showSetupDialog,
+  showBoardDialog,
+  showLevelPicker,
+]);
   const addHumanPlayer = () => {
     if (draft.vsVirtual) return;
     if (draft.humanNames.length >= 4) return;
@@ -1133,7 +1255,53 @@ const pushToFirebase = useCallback(async () => {
     setShowBoardDialog(false);
     startGame(variant, boardNr != null, boardNr, replayDraft);
   };
+// useEffect(() => {
+//   const hasDom =
+//     typeof window !== 'undefined' &&
+//     typeof document !== 'undefined' &&
+//     typeof document.addEventListener === 'function' &&
+//     typeof document.removeEventListener === 'function' &&
+//     typeof window.addEventListener === 'function' &&
+//     typeof window.removeEventListener === 'function';
 
+//   if (!hasDom) return;
+
+//   const win = window as any;
+
+//   const handleKeyDown = (e: any) => {
+//     const target = e?.target as any;
+//     const tag = String(target?.tagName || '').toLowerCase();
+
+//     if (tag === 'input' || tag === 'textarea' || !!target?.isContentEditable) {
+//       return;
+//     }
+
+//     if (showWinnerDialog || showSetupDialog || showBoardDialog || showLevelPicker || showBroadcastDialog || showScanDialog || showLocationPermissionDialog || showScannerScreen || showInactiveDialog) {
+//       return;
+//     }
+
+//     const key = String(e?.key || '');
+
+   
+//   };
+
+//   win.addEventListener('keydown', handleKeyDown);
+//   return () => win.removeEventListener('keydown', handleKeyDown);
+// }, [
+//   showWinnerDialog,
+//   showSetupDialog,
+//   showBoardDialog,
+//   showLevelPicker,
+//   showBroadcastDialog,
+//   showScanDialog,
+//   showLocationPermissionDialog,
+//   showScannerScreen,
+//   showInactiveDialog,
+//   onSectorTap,
+//   onEnter,
+//   onClear,
+//   onUndo,
+// ]);
   useEffect(() => {
     if (openNewGameRequestKey == null) return;
     if (handledOpenNewGameKeyRef.current === openNewGameRequestKey) return;
@@ -1207,6 +1375,11 @@ const pushToFirebase = useCallback(async () => {
 
   const requestStart = (selectedVariant: CricketVariant) => {
     ensureKrikettFullscreen();
+     void trackAnalyticsClick(
+        selectedVariant === 'penalty' ? 'start_cricket_cutthroat' : 'start_cricket_normal',
+        buildCricketNamesExtra()
+      );
+
     if (!clubId?.trim()) {
       startGame(selectedVariant, false);
       return;
@@ -1266,9 +1439,16 @@ const src = require('./broadcast.png');
     >
         <View style={styles.topSpacer} />
 
-        <Pressable
-          style={styles.floatingBoardBadgeBtn}
+       <Pressable
+          style={[
+            styles.broadcastBottomLeftBtn,
+            {
+              left: 2 + insets.left,
+              bottom: 2 + insets.bottom,
+            },
+          ]}
           onPress={() => {
+            void trackAnalyticsClick('broadcast_pressed_cricket');
             if (boardId) {
               setQrActivated(true);
               setShowBroadcastDialog(true);
@@ -1278,7 +1458,6 @@ const src = require('./broadcast.png');
         >
           {renderBroadcastIcon()}
         </Pressable>
-
         <Animated.View
           pointerEvents="none"
           style={[
@@ -1341,9 +1520,7 @@ const src = require('./broadcast.png');
               ))}
               <View >
                
-                <Text style={styles.pointsTextPortrait} numberOfLines={1}>
-                  {' '}
-                </Text>
+                
               </View>
             </View>
           ))}
@@ -1563,7 +1740,7 @@ const src = require('./broadcast.png');
                 <Text style={styles.modalInputLikeText}>{`Lv.${draft.virtualLevel}`}</Text>
               </Pressable>
             ) : draft.humanNames.length < 4 ? (
-              <Pressable onPress={addHumanPlayer} style={[styles.modalBtn, styles.modalBtnGhost, { marginTop: 10 }]}>
+              <Pressable onPress={addHumanPlayer} style={[styles.modalBtnStandalone, styles.modalBtnGhost, { marginTop: 10 }]}>
                 <Text style={styles.modalBtnTextGhost}>Add player</Text>
               </Pressable>
             ) : null}
@@ -1666,7 +1843,9 @@ const src = require('./broadcast.png');
           <Pressable style={styles.modalCard} onPress={() => {}}>
             <Pressable
               style={styles.modalCloseBtn}
-              onPress={() => setShowBroadcastDialog(false)}
+              onPress={() => {
+                setShowBroadcastDialog(false);
+              }}
               hitSlop={10}
             >
               <Text style={styles.modalCloseBtnText}>×</Text>
@@ -1693,6 +1872,8 @@ const src = require('./broadcast.png');
               <Pressable
                 style={styles.scanScoreboardBtn}
                 onPress={async () => {
+                  
+                void trackAnalyticsClick('scan_pressed_cricket');
                   const granted = cameraPermission?.granted || (await requestCameraPermission())?.granted;
                   if (!granted) return;
                   setShowBroadcastDialog(false);
@@ -1864,24 +2045,36 @@ const src = require('./broadcast.png');
   </View>
 </Modal>
       <Modal visible={showWinnerDialog} transparent animationType="fade" onRequestClose={() => setShowWinnerDialog(false)}>
-        <View style={styles.modalOverlay}><View style={styles.modalCard}>
-          <Text style={styles.modalTitle}>Winner</Text>
-          <Text style={styles.modalLabel}>{winnerText}</Text>
-          <Text style={styles.modalLabel}>{winnerRound != null ? `Round ${winnerRound}` : ''}</Text>
-          <Pressable
-            style={[styles.modalBtn, styles.modalBtnOk, { marginTop: 12 }]}
-            onPress={() => {
-              if (pendingWinnerIdx != null) {
-                restartAfterWin(pendingWinnerIdx);
-              } else {
-                setShowWinnerDialog(false);
-              }
-            }}
-          >
-            <Text style={styles.modalBtnTextOk}>OK</Text>
-          </Pressable>
-        </View></View>
-      </Modal>
+  <View style={styles.modalOverlay}>
+    <View style={styles.modalCard}>
+      <Text style={styles.modalTitle}>Winner</Text>
+      <Text style={styles.modalLabel}>{winnerText}</Text>
+      <Text style={styles.modalLabel}>{winnerRound != null ? `Round ${winnerRound}` : ''}</Text>
+
+      <View style={styles.modalBtns}>
+        <Pressable
+          style={[styles.modalBtnStandalone, styles.modalBtnGhost]}
+          onPress={onUndo}
+        >
+          <Text style={styles.modalBtnTextGhostStrong}>UNDO</Text>
+        </Pressable>
+
+        <Pressable
+          style={[styles.modalBtnStandalone, styles.modalBtnOkStrong]}
+          onPress={() => {
+            if (pendingWinnerIdx != null) {
+              restartAfterWin(pendingWinnerIdx);
+            } else {
+              setShowWinnerDialog(false);
+            }
+          }}
+        >
+          <Text style={styles.modalBtnTextOkStrong}>OK</Text>
+        </Pressable>
+      </View>
+    </View>
+  </View>
+</Modal>
 
       
       <Modal visible={showInactiveDialog} transparent animationType="fade" onRequestClose={() => setShowInactiveDialog(false)}>
@@ -1907,21 +2100,27 @@ topSpacer: { height: 0 },
   zIndex: 2000,
   elevation: 8,
 },
+broadcastBottomLeftBtn: {
+  position: 'absolute',
+  zIndex: 2000,
+  elevation: 8,
+},
 cricketMarkChipShort: {
-  width: 28,
-  minWidth: 28,
+  width: 32,
+  minWidth: 32,
   height: 50,
   paddingVertical: 4,
-  paddingHorizontal: 3,
+  paddingHorizontal: 1,
   borderRadius: 6,
 },
 playerCellPortrait: {
-  flex: 2.11,
-  minWidth: 34,
+  width: 82,
+  minWidth: 82,
+  maxWidth: 82,
   alignItems: 'flex-start',
   justifyContent: 'space-between',
+  flexShrink: 0,
 },
-
 winsCellPortrait: {
   minWidth: 22,
   alignItems: 'center',
@@ -1930,11 +2129,12 @@ winsCellPortrait: {
 
 pointsTextPortrait: {
   marginTop: 0,
-  minWidth: 32,
+  minWidth: 28,
   fontSize: 18,
   fontWeight: '800',
   color: '#b38f00',
-  textAlign: 'left',
+  textAlign: 'right',
+  flexShrink: 0,
 },
 
 playerWinsTextPortrait: {
@@ -1979,8 +2179,13 @@ cricketMarkThirdFillVerticalMid: {
 },
 
 cricketMarkChipLabelVertical: {
-  fontSize: 16,
+  fontSize: 14,
   lineHeight: 16,
+
+  color: 'rgba(255,255,255,0.92)',
+  fontWeight: '500',
+  textAlign: 'center',
+  zIndex: 2,
 },
 modalCloseBtn: {
   position: 'absolute',
@@ -2114,6 +2319,9 @@ broadcastOuter: {
 },
 
 broadcastCircle: {
+  width: 48,
+  height: 48,
+  borderRadius: 24,
   alignItems: 'center',
   justifyContent: 'center',
   borderWidth: 2,
@@ -2135,7 +2343,6 @@ broadcastIconInside: {
   resizeMode: 'contain',
   tintColor: 'rgba(0,0,0,0.70)',
 },
-
 broadcastBadge: {
   position: 'absolute',
   right: -6,
@@ -2195,10 +2402,12 @@ rowNames: {
   justifyContent: 'space-between',
   width: '20%',
 },
+
 rowNamesPortrait: {
   flexDirection: 'row',
   justifyContent: 'space-between',
   width: '100%',
+  minWidth: 0,
 },
 
 tableRow: {
@@ -2312,15 +2521,14 @@ pointsCell: {
 
 markCell: {
   flex: 1,
+  minWidth: 0,
   alignItems: 'center',
   justifyContent: 'center',
 },
-
 markCellBoxWrap: {
   paddingVertical: 1,
-  paddingHorizontal: 2,
+  paddingHorizontal: 1,
 },
-
 playerNameActive: {
   color: '#3DFF2F',
 },
@@ -2377,6 +2585,7 @@ cricketMarkChipLabel: {
   turnInput: { height: 44, backgroundColor: '#fff', borderWidth: 2, borderColor: 'rgba(0,0,0,0.18)', borderRadius: 10, paddingHorizontal: 12, fontSize: 18, fontWeight: '900', color: 'rgba(0,0,0,0.82)' },
   turnInputLandscape: {
     flex: 1,
+    textAlign: 'right'
   },
   buttonArea: { flex: 1, justifyContent: 'space-between', gap: 8 },
   buttonRow: { flex: 1, flexDirection: 'row', gap: 8 },
@@ -2438,7 +2647,31 @@ cricketMarkChipLabel: {
   },
   cornerMenu: { position: 'absolute', right: 6, bottom: 6, width: 64, height: 64, borderRadius: 999, backgroundColor: '#2f6f18', alignItems: 'center', justifyContent: 'center', zIndex: 999, elevation: 5 },
   cornerText: { color: '#ffffff', fontWeight: '900', fontSize: 22 },
+modalBtnStandalone: {
+  borderRadius: 10,
+  paddingVertical: 10,
+  paddingHorizontal: 14,
+  minHeight: 44,
+  alignItems: 'center',
+  justifyContent: 'center',
+  flex: 1,
+},
 
+modalBtnOkStrong: {
+  backgroundColor: '#2f6f18',
+},
+
+modalBtnTextOkStrong: {
+  color: '#ffffff',
+  fontWeight: '700',
+  fontSize: 16,
+},
+
+modalBtnTextGhostStrong: {
+  color: 'rgba(0,0,0,0.88)',
+  fontWeight: '700',
+  fontSize: 16,
+},
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', alignItems: 'center', justifyContent: 'center' },
   modalCard: { width: '92%', maxWidth: 380, backgroundColor: '#fff', borderRadius: 14, padding: 14 },
   modalCardWide: { width: '92%', maxWidth: 420, backgroundColor: '#fff', borderRadius: 14, padding: 14 },

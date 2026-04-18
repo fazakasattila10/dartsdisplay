@@ -1,10 +1,12 @@
+import { useKeepAwake } from 'expo-keep-awake';
 import * as Location from 'expo-location';
-import { onValue, ref } from "firebase/database";
+import { onValue, push, ref } from "firebase/database";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DimensionValue, StyleProp, ViewStyle } from "react-native";
 
 import {
-  Linking, Modal,
+  Linking,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -20,7 +22,8 @@ import { db } from "../../lib/firebase";
 import HistoryScreen from "./HistoryScreen";
 import KrikettScreen from "./KrikettScreen";
 import ScoringScreen2 from "./ScoringScreen2";
-import { addWatchedId, getDistanceMeters, getSavedWatchedIds, parseBoardIdFromText, requestBrowserLikeLocation, saveWatchedIds } from "./broadcastShared";
+import { addWatchedId, getDistanceMeters, getOrCreateDeviceId, getSavedWatchedIds, parseBoardIdFromText, requestBrowserLikeLocation, saveWatchedIds } from "./broadcastShared";
+
 type BoardData = {
   raw: string;
   parts: string[];
@@ -269,37 +272,6 @@ function useDisplayWakeLock(enabled: boolean) {
 }
 const CURRENT_VERSION_CODE = 1;
 
-const [showUpdateDialog, setShowUpdateDialog] = useState(false);
-const [updateTitle, setUpdateTitle] = useState('Update available');
-const [updateMessage, setUpdateMessage] = useState('');
-const [updateStoreUrl, setUpdateStoreUrl] = useState('');
-useEffect(() => {
-  const updateRef = ref(db, "appConfig/update");
-
-  const unsub = onValue(updateRef, (snap) => {
-    const value = snap.val();
-    const enabled = !!value?.enabled;
-    const minVersionCode = Number(value?.minVersionCode) || 0;
-    const title = String(value?.title || "Update available");
-    const message = String(value?.message || "");
-    const storeUrl = String(value?.storeUrl || "");
-
-    if (true) {
-      // setUpdateTitle(title);
-      // setUpdateMessage(message);
-      // setUpdateStoreUrl(storeUrl);
-      // setShowUpdateDialog(true);
-      setUpdateTitle("Update available");
-setUpdateMessage("Test update dialog from Firebase logic.");
-setUpdateStoreUrl("https://play.google.com/store/apps/details?id=hu.fazo.dartstrainer");
-setShowUpdateDialog(true);
-      return;
-    }
-
-  });
-
-  return () => unsub();
-}, []);
 function loadClubId(): string {
   try {
     if (typeof window === "undefined") return DEFAULT_CLUB_ID;
@@ -603,9 +575,27 @@ function StatRow(props: { left: string; label: string; right: string; fontZoom: 
 
 export default function HomeScreen() {
 
-
+if (Platform.OS !== 'web') {
+    useKeepAwake();
+  }
   const insets = useSafeAreaInsets();
   const [showStartupLocationDialog, setShowStartupLocationDialog] = useState(false);
+  const [showUpdateDialog, setShowUpdateDialog] = useState(false);
+const [updateTitle, setUpdateTitle] = useState('Update available');
+const [updateMessage, setUpdateMessage] = useState('');
+const [updateStoreUrl, setUpdateStoreUrl] = useState('');
+const analyticsDeviceIdRef = useRef<string>(getOrCreateDeviceId());
+
+const trackAnalyticsClick = useCallback(async (clickType: string, extraInfo: string = '') => {
+  try {
+    await push(ref(db, 'analyticsClicks'), {
+      deviceId: analyticsDeviceIdRef.current,
+      timestamp: Date.now(),
+      extraInfo,
+      clickType,
+    });
+  } catch {}
+}, []);
 const startupLocationAskedRef = useRef(false);
   const { width, height } = useWindowDimensions();
   const isPortrait = height >= width;
@@ -684,7 +674,30 @@ useEffect(() => {
     } catch {}
   })();
 }, []);
+useEffect(() => {
+  const updateRef = ref(db, "appConfig/update");
 
+  const unsub = onValue(updateRef, (snap) => {
+    const value = snap.val();
+    const enabled = !!value?.enabled;
+    const minVersionCode = Number(value?.minVersionCode) || 0;
+    const title = String(value?.title || "Update available");
+    const message = String(value?.message || "");
+    const storeUrl = String(value?.storeUrl || "");
+
+    if (enabled && minVersionCode > CURRENT_VERSION_CODE && message && storeUrl) {
+      setUpdateTitle(title);
+      setUpdateMessage(message);
+      setUpdateStoreUrl(storeUrl);
+      setShowUpdateDialog(true);
+      return;
+    }
+
+    setShowUpdateDialog(false);
+  });
+
+  return () => unsub();
+}, []);
   useEffect(() => {
     const unsub = onValue(ref(db, 'boards'), (snap) => {
       const value = snap.val() || {};
@@ -754,6 +767,7 @@ const displayGesture = useMemo(
 );
 
   const replayCurrentGame = useCallback(() => {
+  void trackAnalyticsClick('menu_re_match', gameMode);
   setShowGameMenu(false);
 
   if (gameMode === 'scoring') {
@@ -762,24 +776,28 @@ const displayGesture = useMemo(
   }
 
   setCricketReplayKey((v) => (v ?? 0) + 1);
-}, [gameMode]);
+}, [gameMode, trackAnalyticsClick]);
+
   const closeGameMenu = useCallback(() => {
     setShowGameMenu(false);
   }, []);
   const handleRootExit = useCallback(() => {
     if (typeof window !== 'undefined' && window.history.length > 1) window.history.back();
   }, []);
+
 const openScoringNewGame = useCallback(() => {
+  // void trackAnalyticsClick('menu_new_501');
   setShowGameMenu(false);
   setMode('scoring');
   setScoringOpenNewKey((v) => (v ?? 0) + 1);
-}, []);
+}, [trackAnalyticsClick]);
 
 const openCricketNewGame = useCallback(() => {
+  // void trackAnalyticsClick('menu_new_cricket');
   setShowGameMenu(false);
   setMode('cricket');
   setCricketOpenNewKey((v) => (v ?? 0) + 1);
-}, []);
+}, [trackAnalyticsClick]);
 const clearGameTriggers = useCallback(() => {
   setScoringOpenNewKey(undefined);
   setCricketOpenNewKey(undefined);
@@ -787,12 +805,13 @@ const clearGameTriggers = useCallback(() => {
   setCricketReplayKey(undefined);
 }, []);
 const openDisplayFrom = useCallback((from: 'scoring' | 'cricket') => {
+  void trackAnalyticsClick('menu_big_display', from);
   setShowGameMenu(false);
   clearGameTriggers();
   setDisplayReturnMode(from);
   setFullscreenBoardId(null);
   setMode('display');
-}, [clearGameTriggers]);
+}, [clearGameTriggers, trackAnalyticsClick]);
 
 const openDisplayById = useCallback((id: string, from?: 'scoring' | 'cricket') => {
   const nextId = String(id || '').trim().toUpperCase();
@@ -868,7 +887,7 @@ if (mode === 'scoring' || mode === 'cricket') {
       <Pressable
         style={[
           styles.rootCornerMenu,
-          { right: 6 + insets.right, bottom: 6 + insets.bottom }
+          { right: 2 + insets.right, bottom: 2 + insets.bottom }
         ]}
         onPress={() => setShowGameMenu((v) => !v)}
       >
@@ -968,7 +987,7 @@ if (mode === 'scoring' || mode === 'cricket') {
     </Pressable>
   </Pressable>
 </Modal>
-<Modal
+{ <Modal
   visible={showUpdateDialog}
   transparent
   animationType="fade"
@@ -1000,7 +1019,7 @@ if (mode === 'scoring' || mode === 'cricket') {
       </View>
     </View>
   </View>
-</Modal>
+</Modal> }
     </View>
   );
 }
@@ -1018,9 +1037,9 @@ if (mode === 'history') {
 
     {showHud ? (
       <View style={[styles.bottomLeftRow, { left: 10 + insets.left, bottom: 12 + insets.bottom }]}>
-        <Pressable onPress={() => setMode('history')} hitSlop={12} style={styles.scoringChip}>
+        {/* <Pressable onPress={() => setMode('history')} hitSlop={12} style={styles.scoringChip}>
           <Text style={[styles.clubChipText, { fontSize: scaleFont(13, fontZoom) }]}>history</Text>
-        </Pressable>
+        </Pressable> */}
 
         <Pressable
           onPress={() => setFontZoom((z) => clamp(z - FONT_ZOOM_STEP, FONT_ZOOM_MIN, FONT_ZOOM_MAX))}

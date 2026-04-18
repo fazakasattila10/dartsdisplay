@@ -49,6 +49,12 @@ Join our community of developers creating universal apps.
 - [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
 - [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
 
+
+gradlew assembleRelease - android nativ futtatashoz
+<string name="app_name">ALF DARTS PRACTICE</string> - android nativhoz string fajl resben
+
+
+
 C:\Users\Fazi\Documents\dartsdisplay>npx expo start --web ez futtatja a localhoston
 C:\Users\Fazi\Documents\dartsdisplay>npx expo export --platform web --clear - ez csinalja a buildet, dist-t
 
