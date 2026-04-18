@@ -3,7 +3,6 @@ import * as Location from 'expo-location';
 import { onValue, push, ref } from "firebase/database";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DimensionValue, StyleProp, ViewStyle } from "react-native";
-
 import {
   Linking,
   Modal,
@@ -21,6 +20,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { db } from "../../lib/firebase";
 import HistoryScreen from "./HistoryScreen";
 import KrikettScreen from "./KrikettScreen";
+import KrikettTeamsScreen from "./KrikettTeamsScreen";
 import ScoringScreen2 from "./ScoringScreen2";
 import { addWatchedId, getDistanceMeters, getOrCreateDeviceId, getSavedWatchedIds, parseBoardIdFromText, requestBrowserLikeLocation, saveWatchedIds } from "./broadcastShared";
 
@@ -599,11 +599,11 @@ const trackAnalyticsClick = useCallback(async (clickType: string, extraInfo: str
 const startupLocationAskedRef = useRef(false);
   const { width, height } = useWindowDimensions();
   const isPortrait = height >= width;
-  const [mode, setMode] = useState<"display" | "scoring" | "cricket" | "history">(() => {
+  const [mode, setMode] = useState<"display" | "scoring" | "cricket" | "teamCricket" | "history">(() => {
   const parsed = parseBoardIdFromText(getWindowSearch());
     return parsed ? 'display' : 'scoring';
     });
-  const [displayReturnMode, setDisplayReturnMode] = useState<"scoring" | "cricket">('scoring');
+  const [displayReturnMode, setDisplayReturnMode] = useState<"scoring" | "cricket"| "teamCricket">('scoring');
   const [fullscreenBoardId, setFullscreenBoardId] = useState<string | null>(() => {
     return parseBoardIdFromText(getWindowSearch());
   });
@@ -616,9 +616,16 @@ const startupLocationAskedRef = useRef(false);
   const [showFontSlider, setShowFontSlider] = useState(false);
   const wakeLock = useDisplayWakeLock(mode === 'display');
   const [showGameMenu, setShowGameMenu] = useState(false);
-  const gameMode = mode === 'cricket' ? 'cricket' : 'scoring';
+ const gameMode =
+  mode === 'cricket'
+    ? 'cricket'
+    : mode === 'teamCricket'
+      ? 'teamCricket'
+      : 'scoring';
   const [scoringOpenNewKey, setScoringOpenNewKey] = useState<number | undefined>(undefined);
   const [cricketOpenNewKey, setCricketOpenNewKey] = useState<number | undefined>(undefined);
+  const [teamCricketOpenNewKey, setTeamCricketOpenNewKey] = useState<number | undefined>(undefined);
+const [teamCricketReplayKey, setTeamCricketReplayKey] = useState<number | undefined>(undefined);
   const [scoringReplayKey, setScoringReplayKey] = useState<number | undefined>(undefined);
   const [cricketReplayKey, setCricketReplayKey] = useState<number | undefined>(undefined);
   const pinchStartZoomRef = useRef(1);
@@ -774,7 +781,10 @@ const displayGesture = useMemo(
     setScoringReplayKey((v) => (v ?? 0) + 1);
     return;
   }
-
+  if (gameMode === 'teamCricket') {
+    setTeamCricketReplayKey((v) => (v ?? 0) + 1);
+    return;
+  }
   setCricketReplayKey((v) => (v ?? 0) + 1);
 }, [gameMode, trackAnalyticsClick]);
 
@@ -791,7 +801,11 @@ const openScoringNewGame = useCallback(() => {
   setMode('scoring');
   setScoringOpenNewKey((v) => (v ?? 0) + 1);
 }, [trackAnalyticsClick]);
-
+const openTeamCricketNewGame = useCallback(() => {
+  setShowGameMenu(false);
+  setMode('teamCricket');
+  setTeamCricketOpenNewKey((v) => (v ?? 0) + 1);
+}, []);
 const openCricketNewGame = useCallback(() => {
   // void trackAnalyticsClick('menu_new_cricket');
   setShowGameMenu(false);
@@ -804,7 +818,7 @@ const clearGameTriggers = useCallback(() => {
   setScoringReplayKey(undefined);
   setCricketReplayKey(undefined);
 }, []);
-const openDisplayFrom = useCallback((from: 'scoring' | 'cricket') => {
+const openDisplayFrom = useCallback((from: 'scoring' | 'cricket'| 'teamCricket') => {
   void trackAnalyticsClick('menu_big_display', from);
   setShowGameMenu(false);
   clearGameTriggers();
@@ -858,7 +872,7 @@ const gridItemStyle = useMemo<StyleProp<ViewStyle>>(
   ],
   [fullscreenBoardId]
 );
-if (mode === 'scoring' || mode === 'cricket') {
+if (mode === 'scoring' || mode === 'cricket' || mode === 'teamCricket') {
   return (
     <View style={styles.safe}>
       {gameMode === 'scoring' ? (
@@ -870,6 +884,23 @@ if (mode === 'scoring' || mode === 'cricket') {
           onOpenDisplayById={(id) => openDisplayById(id, 'scoring')}
           openNewGameRequestKey={scoringOpenNewKey}
           replayRequestKey={scoringReplayKey}
+        />
+      ) : gameMode === 'teamCricket' ? (
+       <KrikettTeamsScreen
+          onExit={handleRootExit}
+          clubId={''}
+          initialBoardNr={null}
+          onOpenDisplay={() => {
+            setDisplayReturnMode('cricket');
+            setMode('display');
+          }}
+          onOpenDisplayById={(id) => {
+            setFullscreenBoardId(id);
+            setDisplayReturnMode('cricket');
+            setMode('display');
+          }}
+          openNewGameRequestKey={teamCricketOpenNewKey}
+          replayRequestKey={teamCricketReplayKey}
         />
       ) : (
         <KrikettScreen
@@ -910,6 +941,12 @@ if (mode === 'scoring' || mode === 'cricket') {
             <Pressable style={styles.quickMenuItem} onPress={openCricketNewGame}>
               <Text style={styles.quickMenuItemText}>
                 {gameMode === 'cricket' ? 'new Cricket' : 'Cricket'}
+              </Text>
+            </Pressable>
+            
+            <Pressable style={styles.quickMenuItem} onPress={openTeamCricketNewGame}>
+              <Text style={styles.quickMenuItemText}>
+                {gameMode === 'teamCricket' ? 'new Team Cricket' : 'Team Cricket'}
               </Text>
             </Pressable>
             <Pressable
