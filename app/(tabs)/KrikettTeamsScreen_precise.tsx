@@ -580,8 +580,6 @@ const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const roundFlashScale = useRef(new Animated.Value(0.88)).current;
 
   const turnLabel = useMemo(() => buildTurnLabel(pendingTurn), [pendingTurn]);
-  const teamATotal = useMemo(() => teamTotal(players, 0), [players]);
-const teamBTotal = useMemo(() => teamTotal(players, 1), [players]);
   const handledReplayKeyRef = useRef<number | null>(null);
   const saveNameHistoryFrom = useCallback((names: string[]) => {
     const nextHistory = Array.from(
@@ -1078,7 +1076,7 @@ const src = require('./broadcast.png');
                   <View style={[styles.cellBase, styles.pointsCell]}>
                     <Text style={styles.pointsText}>{player.points}</Text>
                   </View>
-                  <View style={[styles.cellBase, styles.pointsCell]}>
+                  <View style={[styles.cellBase, styles.teamPointsCell]}>
                     <Text style={styles.teamPointsText}>{teamIndexForPlayer(idx) === 0 ? teamATotal : teamBTotal}</Text>
                   </View>
                 </View>
@@ -2052,12 +2050,6 @@ playerNameActive: {
   color: '#3DFF2F',
 },
 
-
-teamPointsText: {
-  fontSize: 19,
-  fontWeight: '800',
-  color: '#b38f00',
-},
 pointsText: {
   fontSize: 19,
   fontWeight: '800',
