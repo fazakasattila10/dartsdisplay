@@ -101,11 +101,11 @@ const QUICK_PORTRAIT_ROWS: Array<Array<{ label: string; kind?: 'num' | 'action' 
   [{ label: '1' }, { label: '2' }, { label: '3' }],
   [{ label: '4' }, { label: '5' }, { label: '6' }],
   [{ label: '7' }, { label: '8' }, { label: '9' }],
-  [{ label: 'OK', kind: 'action' }, { label: '0' }, { label: 'DEL', kind: 'action' }],
+  [{ label: 'DEL', kind: 'action' }, { label: '0' }, { label: 'UNDO', kind: 'action' }],
   [
-    { label: 'LEFT', kind: 'action' },
+    { label: 'OK', kind: 'action' },
     { label: '60', kind: 'quick', value: 60 },
-    { label: 'UNDO', kind: 'action' },
+    { label: 'LEFT', kind: 'action' },
   ],
   [
     { label: '121', kind: 'quick', value: 121 },
@@ -1095,11 +1095,54 @@ useEffect(() => {
       }
       const actualPlan = virtualPlanRef.current;
       if (!actualPlan) return;
-      const turnValue = actualPlan.turns[actualPlan.turnIndex] ?? 0;
-      const remainingDarts = actualPlan.darts.length - actualPlan.dartIndex;
-      const isFinalTurn = remainingDarts <= 3;
-      const dartsUsed = (isFinalTurn ? Math.max(1, Math.min(3, remainingDarts)) : 3) as 1 | 2 | 3;
-      const res = applyScoringAs(matchConfig.virtualSide, { kind: 'score', value: turnValue, allowZero: turnValue === 0 }, 'virtual', isFinalTurn ? dartsUsed : undefined);
+      let turnValue = actualPlan.turns[actualPlan.turnIndex] ?? 0;
+      let remainingDarts = actualPlan.darts.length - actualPlan.dartIndex;
+      let isFinalTurn = remainingDarts <= 3;
+      let dartsUsed = (isFinalTurn ? Math.max(1, Math.min(3, remainingDarts)) : 3) as 1 | 2 | 3;
+
+      const virtualScore = playersRef.current[matchConfig.virtualSide]?.score ?? 0;
+
+      if (virtualScore > 60 && turnValue === 0) {
+        let foundPlayableTurn = false;
+
+        for (let guard = 0; guard < 20; guard += 1) {
+          actualPlan.turnIndex += 1;
+          actualPlan.dartIndex += isFinalTurn ? dartsUsed : 3;
+
+          if (actualPlan.turnIndex >= actualPlan.turns.length) {
+            prepareVirtualPlan(matchConfig.virtualLevel);
+            break;
+          }
+
+          turnValue = actualPlan.turns[actualPlan.turnIndex] ?? 0;
+          remainingDarts = actualPlan.darts.length - actualPlan.dartIndex;
+          isFinalTurn = remainingDarts <= 3;
+          dartsUsed = (isFinalTurn ? Math.max(1, Math.min(3, remainingDarts)) : 3) as 1 | 2 | 3;
+
+          if (turnValue !== 0) {
+            foundPlayableTurn = true;
+            break;
+          }
+        }
+
+        if (!foundPlayableTurn) {
+          const regeneratedPlan = virtualPlanRef.current;
+          if (!regeneratedPlan) return;
+
+          turnValue = regeneratedPlan.turns[regeneratedPlan.turnIndex] ?? 0;
+          remainingDarts = regeneratedPlan.darts.length - regeneratedPlan.dartIndex;
+          isFinalTurn = remainingDarts <= 3;
+          dartsUsed = (isFinalTurn ? Math.max(1, Math.min(3, remainingDarts)) : 3) as 1 | 2 | 3;
+        }
+      }
+
+      const res = applyScoringAs(
+        matchConfig.virtualSide,
+        { kind: 'score', value: turnValue, allowZero: turnValue === 0 },
+        'virtual',
+        isFinalTurn ? dartsUsed : undefined
+      );
+
       if (res.applied) {
         actualPlan.turnIndex += 1;
         actualPlan.dartIndex += isFinalTurn ? dartsUsed : 3;
@@ -2247,7 +2290,7 @@ function ensureDocFullscreen() {
 }
 function KeyFlex(props: { label: string; onPress: () => void; kind?: 'num' | 'action' | 'quick' }) {
   const kind = props.kind ?? 'num';
-
+ const label = props.label ?? '';
   return (
     <Pressable
       onTouchStart={(e) => {
@@ -2256,7 +2299,7 @@ function KeyFlex(props: { label: string; onPress: () => void; kind?: 'num' | 'ac
       }}
       style={({ pressed }) => [
         styles.keyFlex,
-        kind === 'action' ? styles.keyAction : null,
+        kind === 'action' ? (label === 'OK'?styles.keyActionOK:styles.keyAction) : null,
         kind === 'quick' ? styles.keyQuick : null,
         pressed ? { opacity: 0.78 } : null,
       ]}
@@ -2305,6 +2348,7 @@ topSpacer: { height: 0 },
   kRowFlex: { flex: 1, flexDirection: 'row', gap: 6, marginBottom: 6 },
   keyFlex: { flex: 1, borderRadius: 8, backgroundColor: '#f3d49b', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(0,0,0,0.12)' },
   keyAction: { backgroundColor: '#7a5b22' },
+  keyActionOK: { backgroundColor: '#2f6f18' },
   keyQuick: { backgroundColor: '#c9b07a' },
   keyText: { color: '#b3422a', fontWeight: '900', fontSize: 26 },
   keyTextAction: { color: 'rgba(255,255,255,0.92)', fontSize: 18 },

@@ -944,11 +944,11 @@ if (mode === 'scoring' || mode === 'cricket' || mode === 'teamCricket') {
               </Text>
             </Pressable>
             
-            <Pressable style={styles.quickMenuItem} onPress={openTeamCricketNewGame}>
+            {/* <Pressable style={styles.quickMenuItem} onPress={openTeamCricketNewGame}>
               <Text style={styles.quickMenuItemText}>
                 {gameMode === 'teamCricket' ? 'new Team Cricket' : 'Team Cricket'}
               </Text>
-            </Pressable>
+            </Pressable> */}
             <Pressable
               style={styles.quickMenuItem}
               onPress={() => openDisplayFrom(gameMode)}

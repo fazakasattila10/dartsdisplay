@@ -659,6 +659,8 @@ export default function KrikettScreen({ onExit, clubId, initialBoardNr, onOpenSc
   const [locationCoords, setLocationCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [locationGranted, setLocationGranted] = useState(false);
   const [showSetupDialog, setShowSetupDialog] = useState(false);
+  const [showNamesDialog, setShowNamesDialog] = useState(false);
+const [showNameSuggestions, setShowNameSuggestions] = useState<Record<number, boolean>>({});
   const [showBoardDialog, setShowBoardDialog] = useState(false);
   const [showLevelPicker, setShowLevelPicker] = useState(false);
   const playersRef = useRef(players);
@@ -749,6 +751,63 @@ const openBoardFromScannedText = useCallback((raw: string) => {
   onOpenDisplayById?.(parsed);
   return true;
 }, [onOpenDisplayById]);
+const openNames = () => {
+  setDraft((prev) => ({
+    ...prev,
+    humanNames: players
+      .filter((p) => !p.isVirtual)
+      .map((p) => p.name),
+  }));
+  setNameTouched([false, false, false, false]);
+  setShowNameSuggestions({});
+  setShowNamesDialog(true);
+};
+
+const swapCricketNames = () => {
+  setDraft((prev) => {
+    const nextNames = [...prev.humanNames];
+
+    if (prev.vsVirtual) {
+      return prev;
+    }
+
+    if (nextNames.length >= 2) {
+      [nextNames[0], nextNames[1]] = [nextNames[1], nextNames[0]];
+    }
+
+    return { ...prev, humanNames: nextNames };
+  });
+};
+
+const confirmNamesOnly = () => {
+  const humanNames = draft.humanNames
+    .map((name, idx) => (name || `PL.${idx + 1}`).trim() || `PL.${idx + 1}`);
+
+  const nextPlayers = clonePlayers(playersRef.current);
+
+  let humanIdx = 0;
+  for (let i = 0; i < nextPlayers.length; i += 1) {
+    if (nextPlayers[i].isVirtual) continue;
+    nextPlayers[i].name = humanNames[humanIdx] || nextPlayers[i].name;
+    humanIdx += 1;
+  }
+
+  playersRef.current = nextPlayers;
+  setPlayers(nextPlayers);
+
+  const nextHistory = Array.from(
+    new Set([
+      ...humanNames.filter(Boolean),
+      ...playerNameHistory,
+    ])
+  ).slice(0, 20);
+
+  setPlayerNameHistory(nextHistory);
+  savePlayerNameHistory(nextHistory);
+
+  setShowNamesDialog(false);
+  setShowNameSuggestions({});
+};
 const requestAppLocation = useCallback(async () => {
   try {
     if (Platform.OS === 'web') {
@@ -1477,12 +1536,14 @@ const src = require('./broadcast.png');
               {!isPortrait ? (
               <View style = {styles.rowNames}>
                   <View style={[styles.cellBase, styles.playerCell, styles.playerCellRow]}>
-                    <Text
-                      style={[styles.playerNameText, idx === active ? styles.playerNameActive : null]}
-                      numberOfLines={1}
-                    >
-                      {player.name}
-                    </Text>
+                    <Pressable onPress={openNames} hitSlop={8} style={{ flex: 1 }}>
+                      <Text
+                        style={[styles.playerNameText, idx === active ? styles.playerNameActive : null]}
+                        numberOfLines={1}
+                      >
+                        {player.name}
+                      </Text>
+                    </Pressable>
 
                     <Text style={styles.playerWinsText} numberOfLines={1}>
                       {player.wins}
@@ -1495,9 +1556,11 @@ const src = require('./broadcast.png');
               ) : (
               <View style={[styles.cellBase, styles.playerCellPortrait]}>
                 <View style={[styles.rowNamesPortrait]}>
-                <Text style={[styles.playerNameText, idx === active ? styles.playerNameActive : null]} numberOfLines={1}>
-                  {player.name}
-                </Text>
+                <Pressable onPress={openNames} hitSlop={8} style={{ flex: 1 }}>
+                  <Text style={[styles.playerNameText, idx === active ? styles.playerNameActive : null]} numberOfLines={1}>
+                    {player.name}
+                  </Text>
+                </Pressable>
                 <Text style={styles.pointsTextPortrait} numberOfLines={1}>
                   {player.points}
                 </Text>
@@ -1695,7 +1758,95 @@ const src = require('./broadcast.png');
       
       </View>
 
+<Modal visible={showNamesDialog} transparent animationType="fade" onRequestClose={() => setShowNamesDialog(false)}>
+  <View style={styles.modalOverlay}>
+    <View style={styles.modalCard}>
+      <Text style={styles.modalTitle}>Player names</Text>
 
+      <View style={styles.namesEditRow}>
+        <View style={styles.namesEditInputs}>
+          {draft.humanNames.map((name, idx) => (
+            <View key={`name-edit-${idx}`} style={idx > 0 ? { marginTop: 10 } : null}>
+            {showNameSuggestions[idx] && playerNameHistory.length > 0 ? (
+              <View style={styles.nameSuggestionsWrap}>
+                {playerNameHistory
+                  .filter((savedName) => savedName !== name)
+                  .slice(0, 6)
+                  .map((savedName) => (
+                    <Pressable
+                      key={`name-suggestion-${idx}-${savedName}`}
+                      onPress={() => {
+                        setDraft((prev) => {
+                          const next = [...prev.humanNames];
+                          next[idx] = savedName;
+                          return { ...prev, humanNames: next };
+                        });
+                        setNameTouched((prev) => {
+                          const next = [...prev];
+                          next[idx] = true;
+                          return next;
+                        });
+                        setShowNameSuggestions((prev) => ({ ...prev, [idx]: false }));
+                      }}
+                      style={styles.nameSuggestionChip}
+                    >
+                      <Text style={styles.nameSuggestionText}>{savedName}</Text>
+                    </Pressable>
+                  ))}
+              </View>
+            ) : null}
+
+            <TextInput
+              value={name}
+              onChangeText={(v) => {
+                setDraft((prev) => {
+                  const next = [...prev.humanNames];
+                  next[idx] = v;
+                  return { ...prev, humanNames: next };
+                });
+              }}
+              style={styles.modalInput}
+              placeholder={`PL.${idx + 1}`}
+              placeholderTextColor="rgba(0,0,0,0.45)"
+              onFocus={() => {
+                setShowNameSuggestions((prev) => ({ ...prev, [idx]: true }));
+
+                // if (!nameTouched[idx]) {
+                //   setDraft((prev) => {
+                //     const next = [...prev.humanNames];
+                //     next[idx] = '';
+                //     return { ...prev, humanNames: next };
+                //   });
+                //   setNameTouched((prev) => {
+                //     const next = [...prev];
+                //     next[idx] = true;
+                //     return next;
+                //   });
+                // }
+              }}
+            />
+          </View>
+          ))}
+        </View>
+
+        {!draft.vsVirtual && draft.humanNames.length === 2 ? (
+          <Pressable onPress={swapCricketNames} hitSlop={10} style={styles.swapBtnSide}>
+            <Text style={styles.swapBtnText}>⇄</Text>
+          </Pressable>
+        ) : null}
+      </View>
+
+      <View style={styles.modalBtns}>
+        <Pressable style={[styles.modalBtn, styles.modalBtnGhost]} onPress={() => setShowNamesDialog(false)}>
+          <Text style={styles.modalBtnTextGhost}>Cancel</Text>
+        </Pressable>
+        <Pressable style={[styles.modalBtn, styles.modalBtnOk]} onPress={confirmNamesOnly}>
+          <Text style={styles.modalBtnTextOk}>OK</Text>
+        </Pressable>
+      </View>
+    </View>
+  </View>
+</Modal>
      
       <Modal visible={showSetupDialog} transparent animationType="fade" onRequestClose={() => setShowSetupDialog(false)}>
         <View style={styles.modalOverlay}>
@@ -2711,4 +2862,61 @@ modalBtnTextGhostStrong: {
   modalHintSmall: { marginTop: 10, 
   textAlign: 'center',color: 'rgba(63,63,63,0.45)', fontWeight: '800', fontSize: 12 },
   busyWarningText: { marginTop: 10, fontWeight: '900', color: '#b3422a' },
+  nameSuggestionsWrap: {
+  flexDirection: 'row',
+  flexWrap: 'wrap',
+  gap: 6,
+  marginBottom: 8,
+},
+
+nameSuggestionChip: {
+  borderRadius: 999,
+  backgroundColor: 'rgba(0,0,0,0.08)',
+  paddingHorizontal: 10,
+  paddingVertical: 6,
+},
+
+nameSuggestionText: {
+  fontWeight: '800',
+  color: 'rgba(0,0,0,0.68)',
+  fontSize: 12,
+},
+
+swapBtnBetween: {
+  alignSelf: 'center',
+  marginTop: 10,
+  marginBottom: 2,
+  width: 38,
+  height: 38,
+  borderRadius: 19,
+  backgroundColor: 'rgba(0,0,0,0.08)',
+  alignItems: 'center',
+  justifyContent: 'center',
+},
+
+swapBtnText: {
+  fontSize: 20,
+  fontWeight: '900',
+  color: 'rgba(0,0,0,0.6)',
+  transform: [{ rotate: '90deg' }, { translateY: -3 }],
+},
+namesEditRow: {
+  marginTop: 6,
+  flexDirection: 'row',
+  alignItems: 'center',
+},
+
+namesEditInputs: {
+  flex: 1,
+},
+
+swapBtnSide: {
+  marginLeft: 10,
+  width: 38,
+  height: 38,
+  borderRadius: 19,
+  backgroundColor: 'rgba(0,0,0,0.08)',
+  alignItems: 'center',
+  justifyContent: 'center',
+},
 });
